@@ -132,10 +132,20 @@ Click **Admin** in the sidebar (owner only) to:
 
 ## Auth model
 
-- **Owner**: Authenticated via secret link printed at startup. Works from any device.
-- **Users**: Invited via magic link. Choose a handle on first access. Session cookie (30 days).
-- **Observers**: Read-only access. Cannot post or tag agents.
-- **Permissions**: Deny-by-default. Owner explicitly allows which agents each user can tag.
+- **Owner**: Authenticated via a one-time secret link printed to the terminal at startup. The secret changes on every restart. Works from any device.
+- **Users**: Invited via magic link (generated from the Admin panel or CLI). Choose a handle on first access. Session cookie (30 days, HttpOnly).
+- **Observers**: Read-only. Cannot post messages, create topics, tag agents, or run commands.
+- **Permissions**: Deny-by-default. Owner must explicitly allow which agents each user can tag via the Admin panel.
+- **All API endpoints** require a valid session. Unauthenticated requests get 401. Only auth endpoints and static assets are public.
+- **WebSocket** connections are authenticated from the session cookie at connection time. Unauthenticated clients cannot join topics, send messages, or run commands.
+- **Identity is server-side**: the author of a message is always derived from the session, never from client-supplied fields.
+
+## Security notes
+
+- No passwords. Auth is session-based (cookie) with magic links.
+- On localhost without HTTPS, the session cookie is not marked `Secure` — this is fine for local development.
+- For production/public access, **always use HTTPS** via a reverse proxy. Teepee sets the `Secure` cookie flag when it detects `X-Forwarded-Proto: https`.
+- The owner secret link is printed to stdout at startup. Treat it like a password — do not share it.
 
 ## Reverse proxy (HTTPS)
 
@@ -146,7 +156,7 @@ For public access, put Teepee behind a reverse proxy:
 caddy reverse-proxy --from teepee.example.com --to localhost:3000
 ```
 
-Teepee reads `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` automatically.
+Teepee reads `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` automatically. When behind HTTPS, session cookies are marked `Secure`.
 
 ## Architecture
 

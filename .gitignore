@@ -4,3 +4,5 @@ dist/
 *.sqlite
 *.db
 .DS_Store
+.codex
+packages/web/src/**/*.js

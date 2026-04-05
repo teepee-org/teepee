@@ -33,7 +33,7 @@ Usage:
   teepee stop                     Stop server
   teepee status                   Show status
 
-  teepee invite <email> [--role member|observer]
+  teepee invite <email> [--role user|observer]
   teepee revoke <email>
   teepee users
 
@@ -155,7 +155,9 @@ agents:
       createUser(db, email, role);
       const token = createInviteToken(db, email);
       console.log(`Invited ${email} as ${role}`);
-      console.log(`Magic link: http://localhost:3000/invite/${token}`);
+      console.log(`Invite token: ${token}`);
+      console.log(`Magic link:   http://<your-host>:<port>/invite/${token}`);
+      console.log(`(Replace <your-host>:<port> with your Teepee server address)`);
     } catch (e: any) {
       console.error(`Error: ${e.message}`);
     }
