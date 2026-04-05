@@ -1,0 +1,19 @@
+teepee:
+  name: teepee-demo
+  language: en
+
+providers:
+  claude:
+    command: "claude --print"
+    timeout_seconds: 120
+  codex:
+    command: "codex exec"
+    timeout_seconds: 120
+
+agents:
+  coder:
+    provider: claude
+  reviewer:
+    provider: claude
+  architect:
+    provider: codex

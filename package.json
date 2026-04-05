@@ -1,0 +1,19 @@
+{
+  "name": "teepee",
+  "version": "0.1.0",
+  "description": "Teepee runs a team of AI agents — coordinating them in realtime.",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces --if-present",
+    "dev": "npm run dev --workspace=packages/server",
+    "start": "node packages/cli/dist/index.js start"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

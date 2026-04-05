@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.teepee/
+*.sqlite
+*.db
+.DS_Store

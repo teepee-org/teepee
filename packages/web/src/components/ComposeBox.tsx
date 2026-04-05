@@ -1,0 +1,142 @@
+import { useState, useRef, useCallback, useEffect } from 'react';
+import type { Agent } from '../types';
+
+interface Props {
+  agents: Agent[];
+  onSend: (text: string) => void;
+  disabled?: boolean;
+}
+
+export function ComposeBox({ agents, onSend, disabled }: Props) {
+  const [text, setText] = useState('');
+  const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [autocompleteFilter, setAutocompleteFilter] = useState('');
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const filteredAgents = agents.filter((a) =>
+    a.name.toLowerCase().startsWith(autocompleteFilter.toLowerCase())
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (showAutocomplete) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setSelectedIdx((i) => Math.min(i + 1, filteredAgents.length - 1));
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSelectedIdx((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          if (filteredAgents[selectedIdx]) {
+            insertMention(filteredAgents[selectedIdx].name);
+          }
+          return;
+        }
+        if (e.key === 'Escape') {
+          setShowAutocomplete(false);
+          return;
+        }
+      }
+
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (text.trim() && !disabled) {
+          onSend(text.trim());
+          setText('');
+        }
+      }
+    },
+    [showAutocomplete, filteredAgents, selectedIdx, text, disabled, onSend]
+  );
+
+  const insertMention = (name: string) => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+
+    const pos = textarea.selectionStart;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+
+    // Find the @ that triggered autocomplete
+    const atIdx = before.lastIndexOf('@');
+    const newText = before.slice(0, atIdx) + '@' + name + ' ' + after;
+    setText(newText);
+    setShowAutocomplete(false);
+
+    // Move cursor after mention
+    setTimeout(() => {
+      const newPos = atIdx + name.length + 2;
+      textarea.setSelectionRange(newPos, newPos);
+      textarea.focus();
+    }, 0);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setText(value);
+
+    // Check for @ autocomplete trigger
+    const pos = e.target.selectionStart;
+    const before = value.slice(0, pos);
+    const atIdx = before.lastIndexOf('@');
+
+    if (atIdx !== -1) {
+      const partial = before.slice(atIdx + 1);
+      // Only trigger if @ is at start or after a space
+      const charBefore = atIdx > 0 ? before[atIdx - 1] : ' ';
+      if (
+        (charBefore === ' ' || charBefore === '\n' || atIdx === 0) &&
+        !partial.includes(' ')
+      ) {
+        setAutocompleteFilter(partial);
+        setSelectedIdx(0);
+        setShowAutocomplete(true);
+        return;
+      }
+    }
+    setShowAutocomplete(false);
+  };
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+    }
+  }, [text]);
+
+  return (
+    <div className="compose-box">
+      {showAutocomplete && filteredAgents.length > 0 && (
+        <div className="autocomplete-dropdown">
+          {filteredAgents.map((agent, i) => (
+            <div
+              key={agent.name}
+              className={`autocomplete-item ${i === selectedIdx ? 'selected' : ''}`}
+              onClick={() => insertMention(agent.name)}
+            >
+              🤖 @{agent.name}
+              <span className="autocomplete-provider">{agent.provider}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <textarea
+        ref={inputRef}
+        value={text}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        placeholder={disabled ? 'Read-only' : 'Type a message... (@ to mention agents, Shift+Enter for new line)'}
+        disabled={disabled}
+        rows={3}
+      />
+    </div>
+  );
+}

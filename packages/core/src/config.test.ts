@@ -1,0 +1,167 @@
+import { describe, it, expect } from 'vitest';
+import { loadConfig, resolvePrompt, resolveTimeout } from './config.js';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+function tmpConfig(content: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-test-'));
+  const file = path.join(dir, 'teepee.yaml');
+  fs.writeFileSync(file, content);
+  return file;
+}
+
+describe('loadConfig', () => {
+  it('loads valid config', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test-project
+  language: it
+
+providers:
+  claude:
+    command: "echo test"
+    timeout_seconds: 60
+
+agents:
+  coder:
+    provider: claude
+  reviewer:
+    provider: claude
+    prompt: "./prompts/reviewer.md"
+`);
+    const config = loadConfig(file);
+    expect(config.teepee.name).toBe('test-project');
+    expect(config.teepee.language).toBe('it');
+    expect(config.providers.claude.command).toBe('echo test');
+    expect(config.providers.claude.timeout_seconds).toBe(60);
+    expect(config.agents.coder.provider).toBe('claude');
+    expect(config.agents.reviewer.prompt).toBe('./prompts/reviewer.md');
+  });
+
+  it('applies default language', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.teepee.language).toBe('en');
+  });
+
+  it('applies default limits', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.limits.max_agents_per_message).toBe(5);
+    expect(config.limits.max_chain_depth).toBe(2);
+  });
+
+  it('rejects missing name', () => {
+    const file = tmpConfig(`
+teepee: {}
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow('teepee.name is required');
+  });
+
+  it('rejects unknown provider reference', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  claude:
+    command: "echo"
+agents:
+  coder:
+    provider: codex
+`);
+    expect(() => loadConfig(file)).toThrow("unknown provider 'codex'");
+  });
+
+  it('rejects missing command', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p: {}
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("missing 'command'");
+  });
+
+  it('rejects no providers', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow('at least one provider');
+  });
+
+  it('rejects no agents', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+`);
+    expect(() => loadConfig(file)).toThrow('at least one agent');
+  });
+});
+
+describe('resolveTimeout', () => {
+  const config = {
+    teepee: { name: 'test', language: 'en' },
+    providers: {
+      claude: { command: 'echo', timeout_seconds: 90 },
+      fast: { command: 'echo' },
+    },
+    agents: {
+      coder: { provider: 'claude', timeout_seconds: 180 },
+      reviewer: { provider: 'claude' },
+      quick: { provider: 'fast' },
+    },
+    limits: {
+      max_agents_per_message: 5,
+      max_jobs_per_user_per_minute: 10,
+      max_chain_depth: 2,
+      max_total_jobs_per_chain: 10,
+    },
+  };
+
+  it('uses agent timeout if set', () => {
+    expect(resolveTimeout('coder', config)).toBe(180_000);
+  });
+
+  it('falls back to provider timeout', () => {
+    expect(resolveTimeout('reviewer', config)).toBe(90_000);
+  });
+
+  it('falls back to default 120s', () => {
+    expect(resolveTimeout('quick', config)).toBe(120_000);
+  });
+});

@@ -1,0 +1,17 @@
+{
+  "name": "@teepee/cli",
+  "version": "0.1.0",
+  "bin": {
+    "teepee": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@teepee/core": "*",
+    "@teepee/server": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
