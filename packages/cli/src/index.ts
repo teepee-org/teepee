@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as https from 'https';
+import { spawnSync } from 'child_process';
 import {
   loadConfig,
   openDb,
@@ -68,6 +69,94 @@ Usage:
   teepee version                  Show CLI version
 ${usageUpdateLine()}
 `);
+}
+
+function isCommandAvailable(commandName: string): boolean {
+  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(locator, [commandName], { stdio: 'ignore' });
+  return result.status === 0;
+}
+
+interface StarterConfigResult {
+  template: string;
+  detectedProviders: string[];
+}
+
+function buildStarterConfig(projectName: string): StarterConfigResult {
+  const hasClaude = isCommandAvailable('claude');
+  const hasCodex = isCommandAvailable('codex');
+  const hasOllama = isCommandAvailable('ollama');
+  const detectedProviders: string[] = [];
+  const providerLines = ['providers:'];
+  const agentLines = ['agents:'];
+
+  if (hasClaude) {
+    detectedProviders.push('claude');
+    providerLines.push('  claude:');
+    providerLines.push('    command: "claude -p --permission-mode acceptEdits"');
+  }
+
+  if (hasCodex) {
+    detectedProviders.push('codex');
+    providerLines.push('  codex:');
+    providerLines.push('    command: "codex exec"');
+  }
+
+  if (hasOllama) {
+    detectedProviders.push('ollama');
+    providerLines.push('  ollama:');
+    providerLines.push('    command: "ollama run qwen2.5-coder:7b"');
+  }
+
+  if (hasClaude && hasCodex) {
+    agentLines.push('  coder:');
+    agentLines.push('    provider: claude');
+    agentLines.push('  reviewer:');
+    agentLines.push('    provider: claude');
+    agentLines.push('  architect:');
+    agentLines.push('    provider: codex');
+  } else if (hasClaude) {
+    for (const agentName of ['coder', 'reviewer', 'architect']) {
+      agentLines.push(`  ${agentName}:`);
+      agentLines.push('    provider: claude');
+    }
+  } else if (hasCodex) {
+    for (const agentName of ['coder', 'reviewer', 'architect']) {
+      agentLines.push(`  ${agentName}:`);
+      agentLines.push('    provider: codex');
+    }
+  } else if (hasOllama) {
+    for (const agentName of ['coder', 'reviewer', 'architect']) {
+      agentLines.push(`  ${agentName}:`);
+      agentLines.push('    provider: ollama');
+    }
+  } else {
+    providerLines.push('  # claude:');
+    providerLines.push('  #   command: "claude -p --permission-mode acceptEdits"');
+    providerLines.push('  # codex:');
+    providerLines.push('  #   command: "codex exec"');
+    providerLines.push('  # ollama:');
+    providerLines.push('  #   command: "ollama run qwen2.5-coder:7b"');
+    agentLines.push('  # coder:');
+    agentLines.push('  #   provider: claude');
+    agentLines.push('  # reviewer:');
+    agentLines.push('  #   provider: claude');
+    agentLines.push('  # architect:');
+    agentLines.push('  #   provider: codex');
+  }
+
+  const template = [
+    'teepee:',
+    `  name: ${projectName}`,
+    '  language: en',
+    '',
+    ...providerLines,
+    '',
+    ...agentLines,
+    '',
+  ].join('\n');
+
+  return { template, detectedProviders };
 }
 
 function compareVersions(a: string, b: string): number {
@@ -212,28 +301,19 @@ switch (command) {
     ensureDir();
 
     if (!fs.existsSync(configPath)) {
-      // Generate template config
-      const template = `teepee:
-  name: ${path.basename(process.cwd())}
-  language: en
-
-providers:
-  claude:
-    command: "claude -p --permission-mode acceptEdits"
-  codex:
-    command: "codex exec"
-
-agents:
-  coder:
-    provider: claude
-  reviewer:
-    provider: claude
-  architect:
-    provider: codex
-`;
+      const { template, detectedProviders } = buildStarterConfig(path.basename(process.cwd()));
       fs.writeFileSync(configPath, template);
-      console.log('Created .teepee/config.yaml with default config.');
-      console.log('Edit it, then run: teepee start');
+      console.log('Created .teepee/config.yaml.');
+      if (detectedProviders.length > 0) {
+        console.log(`Detected agent CLIs: ${detectedProviders.join(', ')}`);
+      } else {
+        console.log('No supported agent CLI was detected in PATH.');
+        console.log('Install Claude Code, Codex, or Ollama, or edit the config manually.');
+      }
+      if (detectedProviders.includes('ollama')) {
+        console.log('Note: the default Ollama command uses qwen2.5-coder:7b. Change the model name if needed.');
+      }
+      console.log('Edit it if needed, then run: teepee start');
       break;
     }
 

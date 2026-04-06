@@ -16,6 +16,12 @@ npx teepee-cli start
 
 The npm package is `teepee-cli`. If you install it globally, it exposes the `teepee` binary.
 
+## Prerequisites
+
+- Run Teepee from the root of the project you want it to work on
+- Install Node.js 20+
+- Install at least one agent CLI locally, such as `claude`, `codex`, or `ollama`
+
 ## Why Teepee
 
 Teepee is for the moment when "open a few terminals and coordinate agents by hand" stops scaling.
@@ -58,11 +64,19 @@ agents:
 npx teepee-cli start
 ```
 
-Run this in the root of the project you want Teepee to work on. Teepee creates `.teepee/config.yaml` and keeps its state for that project there.
+Run this in the root of the project you want Teepee to work on. On first run, Teepee creates `.teepee/config.yaml` and exits. It keeps its state for that project in `.teepee/`.
 
-Open the owner link printed in the terminal. Create a topic, start chatting.
+The generated config tries to detect installed agent CLIs such as `claude`, `codex`, and `ollama`, and uses what it finds. If none are detected, Teepee writes a commented starter template for you to edit manually.
 
-**3. Tag agents**
+**3. Start again**
+
+```bash
+npx teepee-cli start
+```
+
+Now Teepee starts the server and prints the owner login link. Open it, create a topic, and start chatting.
+
+**4. Tag agents**
 
 ```
 @coder write a fibonacci function
