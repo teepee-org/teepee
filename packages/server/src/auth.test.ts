@@ -10,19 +10,20 @@ let server: http.Server;
 let close: () => void;
 let port: number;
 let tmpDir: string;
-let ownerSecret: string;
 
 function request(
   method: string,
   urlPath: string,
   body?: object,
-  cookie?: string
+  cookie?: string,
+  extraHeaders?: Record<string, string>
 ): Promise<{ status: number; body: any; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       { hostname: '127.0.0.1', port, path: urlPath, method, headers: {
         'Content-Type': 'application/json',
         ...(cookie ? { Cookie: cookie } : {}),
+        ...(extraHeaders || {}),
       }},
       (res) => {
         let data = '';
@@ -40,36 +41,35 @@ function request(
   });
 }
 
-function extractCookie(headers: http.IncomingHttpHeaders): string | undefined {
-  const sc = headers['set-cookie'];
-  if (!sc) return undefined;
-  const raw = Array.isArray(sc) ? sc[0] : sc;
-  const match = raw.match(/teepee_session=([^;]+)/);
-  return match ? `teepee_session=${match[1]}` : undefined;
-}
-
-function connectWs(cookie?: string): Promise<WebSocket> {
+function connectWsExpectUnauthorized(cookie?: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
       headers: cookie ? { Cookie: cookie } : {},
     });
-    ws.on('open', () => resolve(ws));
-    ws.on('error', reject);
-  });
-}
-
-function wsMessage(ws: WebSocket): Promise<any> {
-  return new Promise((resolve) => {
-    ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+    ws.on('unexpected-response', (_req, res) => {
+      resolve(res.statusCode || 0);
+      ws.terminate();
+    });
+    ws.on('open', () => {
+      ws.close();
+      reject(new Error('WebSocket unexpectedly connected'));
+    });
+    ws.on('error', () => {
+      // expected after unexpected-response on some runtimes
+    });
   });
 }
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-auth-test-'));
-  const configPath = path.join(tmpDir, 'teepee.yaml');
+  const teepeeDir = path.join(tmpDir, '.teepee');
+  fs.mkdirSync(teepeeDir, { recursive: true });
+  const configPath = path.join(teepeeDir, 'config.yaml');
   fs.writeFileSync(configPath, `
 teepee:
   name: auth-test
+server:
+  auth_rate_limit_max_requests: 2
 providers:
   echo:
     command: "cat"
@@ -95,12 +95,6 @@ agents:
     check();
   });
 
-  // Capture owner secret from stdout (we can't easily, so use the owner login endpoint)
-  // Instead, we'll get owner session by finding the secret in .teepee dir
-  // Actually, we need to find the secret. The cleanest way: call every /auth/owner/<guess> — not feasible.
-  // For tests, we'll authenticate by directly creating a session in the DB.
-  // But we don't have direct DB access here. Let's use a different approach:
-  // just test that anonymous access is denied.
 });
 
 afterAll(() => {
@@ -177,6 +171,20 @@ describe('Auth endpoints remain public', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rate limits repeated owner auth attempts', async () => {
+    await request('GET', '/auth/owner/1111111111111111111111111111111111');
+    await request('GET', '/auth/owner/2222222222222222222222222222222222');
+    const res = await request('GET', '/auth/owner/3333333333333333333333333333333333');
+    expect(res.status).toBe(429);
+  });
+
+  it('blocks disallowed CORS origins', async () => {
+    const res = await request('GET', '/auth/session', undefined, undefined, {
+      Origin: 'https://evil.example.com',
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('Static assets remain accessible', async () => {
     const res = await request('GET', '/');
     // May be 200 (if dist exists) or 404, but never 401
@@ -185,31 +193,9 @@ describe('Auth endpoints remain public', () => {
 });
 
 describe('WebSocket auth', () => {
-  it('unauthenticated client gets error on topic.join', async () => {
-    const ws = await connectWs();
-    ws.send(JSON.stringify({ type: 'topic.join', topicId: 1 }));
-    const msg = await wsMessage(ws);
-    expect(msg.type).toBe('error');
-    expect(msg.message).toContain('Not authenticated');
-    ws.close();
-  });
-
-  it('unauthenticated client gets error on message.send', async () => {
-    const ws = await connectWs();
-    ws.send(JSON.stringify({ type: 'message.send', topicId: 1, body: 'hi' }));
-    const msg = await wsMessage(ws);
-    expect(msg.type).toBe('error');
-    expect(msg.message).toContain('Not authenticated');
-    ws.close();
-  });
-
-  it('unauthenticated client gets error on command', async () => {
-    const ws = await connectWs();
-    ws.send(JSON.stringify({ type: 'command', topicId: 1, command: 'topic.language', language: 'it' }));
-    const msg = await wsMessage(ws);
-    expect(msg.type).toBe('error');
-    expect(msg.message).toContain('Not authenticated');
-    ws.close();
+  it('rejects unauthenticated websocket upgrade', async () => {
+    const status = await connectWsExpectUnauthorized();
+    expect(status).toBe(401);
   });
 });
 

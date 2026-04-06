@@ -1,15 +1,28 @@
 {
-  "name": "@teepee/server",
-  "version": "0.1.0",
+  "name": "teepee-server",
+  "version": "0.1.1",
+  "description": "HTTP and WebSocket server for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run"
   },
+  "homepage": "https://teepee.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/teepee-org/teepee.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
   "dependencies": {
-    "@teepee/core": "*",
+    "teepee-core": "^0.1.1",
     "ws": "^8.17.0"
   },
   "devDependencies": {

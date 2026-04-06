@@ -327,7 +327,7 @@ export function AdminPage({ agents, onBack }: Props) {
         {section === 'agents' && (
           <div>
             <h2>Agents</h2>
-            <p className="admin-desc">Agents configured in teepee.yaml. Restart Teepee to apply changes.</p>
+            <p className="admin-desc">Agents configured in .teepee/config.yaml. Restart Teepee to apply changes.</p>
             <table className="admin-table">
               <thead>
                 <tr>
@@ -355,7 +355,7 @@ export function AdminPage({ agents, onBack }: Props) {
             <div className="settings-info">
               <div className="setting-row">
                 <span className="setting-label">Config file</span>
-                <span className="setting-value">teepee.yaml</span>
+                <span className="setting-value">.teepee/config.yaml</span>
               </div>
               <div className="setting-row">
                 <span className="setting-label">Agents</span>

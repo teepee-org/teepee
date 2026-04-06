@@ -4,8 +4,8 @@ teepee:
 
 providers:
   claude:
-    command: "claude --print"
-    timeout_seconds: 120
+    command: "claude -p --permission-mode acceptEdits"
+    timeout_seconds: 300
   codex:
     command: "codex exec"
     timeout_seconds: 120

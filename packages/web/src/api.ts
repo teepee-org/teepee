@@ -42,6 +42,12 @@ export interface ProjectInfo {
   path: string;
   language: string;
   gitBranch: string | null;
+  demo: {
+    enabled: boolean;
+    topic_name: string;
+    hotkey: string;
+    delay_ms: number;
+  };
 }
 
 export async function fetchProject(): Promise<ProjectInfo> {

@@ -241,7 +241,7 @@ export class Orchestrator {
     const command = this.config.providers[this.config.agents[agentName].provider].command;
     const timeoutMs = resolveTimeout(agentName, this.config);
 
-    const result = await runAgent(command, context, timeoutMs, (chunk) => {
+    const result = await runAgent(command, context, timeoutMs, this.basePath, (chunk) => {
       this.callbacks.onJobStream(topicId, jobId, chunk);
     });
 

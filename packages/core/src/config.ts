@@ -24,11 +24,37 @@ export interface TeepeeConfig {
   teepee: {
     name: string;
     language: string;
+    demo: {
+      enabled: boolean;
+      topic_name: string;
+      hotkey: string;
+      delay_ms: number;
+    };
+  };
+  server: {
+    trust_proxy: boolean;
+    cors_allowed_origins: string[];
+    auth_rate_limit_window_seconds: number;
+    auth_rate_limit_max_requests: number;
   };
   providers: Record<string, ProviderConfig>;
   agents: Record<string, AgentConfig>;
   limits: LimitsConfig;
 }
+
+const DEFAULT_SERVER = {
+  trust_proxy: false,
+  cors_allowed_origins: [] as string[],
+  auth_rate_limit_window_seconds: 60,
+  auth_rate_limit_max_requests: 20,
+};
+
+const DEFAULT_DEMO = {
+  enabled: false,
+  topic_name: 'hn-live-demo',
+  hotkey: 'F1',
+  delay_ms: 1200,
+};
 
 const DEFAULT_LIMITS: LimitsConfig = {
   max_agents_per_message: 5,
@@ -54,6 +80,24 @@ export function loadConfig(configPath: string): TeepeeConfig {
     teepee: {
       name: parsed.teepee.name,
       language: parsed.teepee.language || 'en',
+      demo: {
+        enabled: parsed.teepee.demo?.enabled ?? DEFAULT_DEMO.enabled,
+        topic_name: parsed.teepee.demo?.topic_name ?? DEFAULT_DEMO.topic_name,
+        hotkey: parsed.teepee.demo?.hotkey ?? DEFAULT_DEMO.hotkey,
+        delay_ms: parsed.teepee.demo?.delay_ms ?? DEFAULT_DEMO.delay_ms,
+      },
+    },
+    server: {
+      trust_proxy: parsed.server?.trust_proxy ?? DEFAULT_SERVER.trust_proxy,
+      cors_allowed_origins: normalizeOrigins(
+        parsed.server?.cors_allowed_origins ?? DEFAULT_SERVER.cors_allowed_origins
+      ),
+      auth_rate_limit_window_seconds:
+        parsed.server?.auth_rate_limit_window_seconds ??
+        DEFAULT_SERVER.auth_rate_limit_window_seconds,
+      auth_rate_limit_max_requests:
+        parsed.server?.auth_rate_limit_max_requests ??
+        DEFAULT_SERVER.auth_rate_limit_max_requests,
     },
     providers: {},
     agents: {},
@@ -151,4 +195,15 @@ export function resolveTimeout(
   const provider = config.providers[agent?.provider];
   if (provider?.timeout_seconds) return provider.timeout_seconds * 1000;
   return 120_000;
+}
+
+function normalizeOrigins(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === 'string');
+  }
+  if (typeof value === 'string') {
+    return [value];
+  }
+  throw new Error('Config: server.cors_allowed_origins must be a string or list of strings');
 }

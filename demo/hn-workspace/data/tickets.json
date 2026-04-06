@@ -1,0 +1,65 @@
+[
+  {
+    "id": "SUP-101",
+    "title": "Password reset email delayed",
+    "severity": "high",
+    "owner": "maya",
+    "status": "open",
+    "openedDaysAgo": 5,
+    "tags": ["email", "auth", "ops"]
+  },
+  {
+    "id": "SUP-102",
+    "title": "Dashboard widget overlaps on mobile",
+    "severity": "medium",
+    "owner": "luca",
+    "status": "open",
+    "openedDaysAgo": 2,
+    "tags": ["ui", "mobile"]
+  },
+  {
+    "id": "SUP-103",
+    "title": "CSV export truncates long rows",
+    "severity": "high",
+    "owner": "maya",
+    "status": "open",
+    "openedDaysAgo": 9,
+    "tags": ["export", "csv", "backend"]
+  },
+  {
+    "id": "SUP-104",
+    "title": "Notification banner should dismiss",
+    "severity": "low",
+    "owner": "jules",
+    "status": "closed",
+    "openedDaysAgo": 1,
+    "tags": ["ui"]
+  },
+  {
+    "id": "SUP-105",
+    "title": "Search API returns stale cache",
+    "severity": "critical",
+    "owner": "maya",
+    "status": "open",
+    "openedDaysAgo": 12,
+    "tags": ["api", "cache", "ops"]
+  },
+  {
+    "id": "SUP-106",
+    "title": "Invite page missing translated copy",
+    "severity": "low",
+    "owner": "luca",
+    "status": "open",
+    "openedDaysAgo": 4,
+    "tags": ["i18n", "ui"]
+  },
+  {
+    "id": "SUP-107",
+    "title": "Webhook retry loop floods logs",
+    "severity": "medium",
+    "owner": "jules",
+    "status": "open",
+    "openedDaysAgo": 15,
+    "tags": ["ops", "webhooks", "logs"]
+  }
+]

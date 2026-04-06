@@ -6,7 +6,9 @@ import * as path from 'path';
 
 function tmpConfig(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-test-'));
-  const file = path.join(dir, 'teepee.yaml');
+  const teepeeDir = path.join(dir, '.teepee');
+  fs.mkdirSync(teepeeDir, { recursive: true });
+  const file = path.join(teepeeDir, 'config.yaml');
   fs.writeFileSync(file, content);
   return file;
 }
@@ -33,6 +35,7 @@ agents:
     const config = loadConfig(file);
     expect(config.teepee.name).toBe('test-project');
     expect(config.teepee.language).toBe('it');
+    expect(config.teepee.demo.enabled).toBe(false);
     expect(config.providers.claude.command).toBe('echo test');
     expect(config.providers.claude.timeout_seconds).toBe(60);
     expect(config.agents.coder.provider).toBe('claude');
@@ -68,6 +71,82 @@ agents:
     const config = loadConfig(file);
     expect(config.limits.max_agents_per_message).toBe(5);
     expect(config.limits.max_chain_depth).toBe(2);
+    expect(config.server.trust_proxy).toBe(false);
+    expect(config.server.cors_allowed_origins).toEqual([]);
+    expect(config.server.auth_rate_limit_window_seconds).toBe(60);
+    expect(config.server.auth_rate_limit_max_requests).toBe(20);
+    expect(config.teepee.demo).toEqual({
+      enabled: false,
+      topic_name: 'hn-live-demo',
+      hotkey: 'F1',
+      delay_ms: 1200,
+    });
+  });
+
+  it('loads optional server settings', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+server:
+  trust_proxy: true
+  cors_allowed_origins:
+    - "https://app.example.com"
+  auth_rate_limit_window_seconds: 120
+  auth_rate_limit_max_requests: 7
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.server.trust_proxy).toBe(true);
+    expect(config.server.cors_allowed_origins).toEqual(['https://app.example.com']);
+    expect(config.server.auth_rate_limit_window_seconds).toBe(120);
+    expect(config.server.auth_rate_limit_max_requests).toBe(7);
+  });
+
+  it('accepts a single cors origin string', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+server:
+  cors_allowed_origins: "https://app.example.com"
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.server.cors_allowed_origins).toEqual(['https://app.example.com']);
+  });
+
+  it('loads optional demo settings', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+  demo:
+    enabled: true
+    topic_name: autoplay-demo
+    hotkey: F2
+    delay_ms: 1800
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.teepee.demo).toEqual({
+      enabled: true,
+      topic_name: 'autoplay-demo',
+      hotkey: 'F2',
+      delay_ms: 1800,
+    });
   });
 
   it('rejects missing name', () => {
@@ -135,7 +214,16 @@ providers:
 
 describe('resolveTimeout', () => {
   const config = {
-    teepee: { name: 'test', language: 'en' },
+    teepee: {
+      name: 'test',
+      language: 'en',
+      demo: {
+        enabled: false,
+        topic_name: 'hn-live-demo',
+        hotkey: 'F1',
+        delay_ms: 1200,
+      },
+    },
     providers: {
       claude: { command: 'echo', timeout_seconds: 90 },
       fast: { command: 'echo' },
@@ -150,6 +238,12 @@ describe('resolveTimeout', () => {
       max_jobs_per_user_per_minute: 10,
       max_chain_depth: 2,
       max_total_jobs_per_chain: 10,
+    },
+    server: {
+      trust_proxy: false,
+      cors_allowed_origins: [],
+      auth_rate_limit_window_seconds: 60,
+      auth_rate_limit_max_requests: 20,
     },
   };
 

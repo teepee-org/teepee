@@ -29,14 +29,19 @@ import {
   createSession,
   validateToken,
   revokeUserFull,
-} from '@teepee/core';
-import type { TeepeeConfig, OrchestratorCallbacks, SessionUser } from '@teepee/core';
+} from 'teepee-core';
+import type { TeepeeConfig, OrchestratorCallbacks, SessionUser } from 'teepee-core';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
 interface ClientState {
   ws: WebSocket;
-  user: SessionUser | null;
+  user: SessionUser;
   subscribedTopics: Set<number>;
+}
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
 }
 
 export function startServer(
@@ -44,11 +49,11 @@ export function startServer(
   port: number = 3000
 ): { server: http.Server; close: () => void } {
   const config = loadConfig(configPath);
-  const basePath = path.dirname(path.resolve(configPath));
-  const dbPath = path.join(basePath, '.teepee', 'db.sqlite');
+  const teepeeDir = path.dirname(path.resolve(configPath));
+  const basePath = path.dirname(teepeeDir);
+  const dbPath = path.join(teepeeDir, 'db.sqlite');
 
   // Ensure .teepee directory
-  const teepeeDir = path.join(basePath, '.teepee');
   if (!fs.existsSync(teepeeDir)) {
     fs.mkdirSync(teepeeDir, { recursive: true });
   }
@@ -63,6 +68,7 @@ export function startServer(
   const ownerSecret = crypto.randomBytes(16).toString('hex');
 
   const clients = new Set<ClientState>();
+  const authRateLimits = new Map<string, RateLimitEntry>();
 
   // ── Helpers ──
 
@@ -85,7 +91,7 @@ export function startServer(
 
   function getClientIp(req: http.IncomingMessage): string {
     const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
+    if (config.server.trust_proxy && forwarded) {
       const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim();
       if (first) return first;
     }
@@ -93,12 +99,66 @@ export function startServer(
   }
 
   function isBehindHttps(req: http.IncomingMessage): boolean {
-    return req.headers['x-forwarded-proto'] === 'https';
+    return config.server.trust_proxy && req.headers['x-forwarded-proto'] === 'https';
+  }
+
+  function getRequestHost(req: http.IncomingMessage): string {
+    if (config.server.trust_proxy && typeof req.headers['x-forwarded-host'] === 'string') {
+      return req.headers['x-forwarded-host'];
+    }
+    return req.headers.host || `localhost:${port}`;
+  }
+
+  function getRequestOrigin(req: http.IncomingMessage): string {
+    return `${isBehindHttps(req) ? 'https' : 'http'}://${getRequestHost(req)}`;
+  }
+
+  function isAllowedCorsOrigin(req: http.IncomingMessage, origin: string): boolean {
+    return origin === getRequestOrigin(req) || config.server.cors_allowed_origins.includes(origin);
+  }
+
+  function applyCors(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    if (!isAllowedCorsOrigin(req, origin)) return false;
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return true;
+  }
+
+  function consumeAuthRateLimit(req: http.IncomingMessage, bucket: string): boolean {
+    const windowMs = config.server.auth_rate_limit_window_seconds * 1000;
+    const maxRequests = config.server.auth_rate_limit_max_requests;
+    if (maxRequests <= 0) return true;
+    const key = `${bucket}:${getClientIp(req)}`;
+    const now = Date.now();
+    const existing = authRateLimits.get(key);
+    if (!existing || existing.resetAt <= now) {
+      authRateLimits.set(key, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    if (existing.count >= maxRequests) return false;
+    existing.count += 1;
+    return true;
+  }
+
+  function rateLimitAuth(req: http.IncomingMessage, res: http.ServerResponse, bucket: string): boolean {
+    if (consumeAuthRateLimit(req, bucket)) return true;
+    res.setHeader('Retry-After', String(config.server.auth_rate_limit_window_seconds));
+    jsonResponse(res, { error: 'Too many auth attempts. Try again later.' }, 429);
+    return false;
   }
 
   // Central auth: session cookie or nothing. No fallbacks.
   function authenticateRequest(req: http.IncomingMessage): SessionUser | null {
     return getSessionFromReq(req);
+  }
+
+  function jsonResponse(res: http.ServerResponse, data: object, status = 200) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
   }
 
   function broadcast(topicId: number, event: object) {
@@ -139,10 +199,10 @@ export function startServer(
   function httpHandler(req: http.IncomingMessage, res: http.ServerResponse) {
     const url = new URL(req.url || '/', `http://localhost:${port}`);
 
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (!applyCors(req, res)) {
+      jsonResponse(res, { error: 'CORS origin not allowed' }, 403);
+      return;
+    }
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -150,8 +210,7 @@ export function startServer(
     }
 
     function json(data: object, status = 200) {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(data));
+      jsonResponse(res, data, status);
     }
 
     function readBody(): Promise<string> {
@@ -171,6 +230,7 @@ export function startServer(
     // ── Public auth routes (no session required) ──
 
     if (url.pathname.match(/^\/auth\/owner\/[a-f0-9]+$/) && req.method === 'GET') {
+      if (!rateLimitAuth(req, res, 'owner')) return;
       const secret = url.pathname.split('/')[3];
       if (secret === ownerSecret) {
         const sid = createSession(db, ownerEmail, 30, req.headers['user-agent'], getClientIp(req));
@@ -194,6 +254,7 @@ export function startServer(
     }
 
     if (url.pathname.match(/^\/auth\/invite\/[a-f0-9]+$/) && req.method === 'GET') {
+      if (!rateLimitAuth(req, res, 'invite:validate')) return;
       const token = url.pathname.split('/')[3];
       const result = validateToken(db, token);
       if (result.valid) {
@@ -205,11 +266,12 @@ export function startServer(
     }
 
     if (url.pathname === '/auth/invite/accept' && req.method === 'POST') {
+      if (!rateLimitAuth(req, res, 'invite:accept')) return;
       readBody().then((body) => {
         try {
           const { token, handle } = JSON.parse(body);
           const result = acceptInvite(db, token, handle, undefined,
-            req.headers['user-agent'], req.socket.remoteAddress);
+            req.headers['user-agent'], getClientIp(req));
           if (result.ok) {
             setSessionCookie(result.sessionId!);
             json({ email: result.user?.email, handle: result.user?.handle, role: result.user?.role });
@@ -261,9 +323,8 @@ export function startServer(
             }
             if (publicIp !== 'localhost') break;
           }
-          const protocol = isBehindHttps(req) ? 'https' : 'http';
-          const host = req.headers['x-forwarded-host'] || req.headers.host || `${publicIp}:${port}`;
-          const link = `${protocol}://${host}/invite/${token}`;
+          const host = req.headers.host ? getRequestHost(req) : `${publicIp}:${port}`;
+          const link = `${isBehindHttps(req) ? 'https' : 'http'}://${host}/invite/${token}`;
           json({ link, token });
         } catch (e: any) {
           json({ error: e.message }, 400);
@@ -364,7 +425,13 @@ export function startServer(
         const { execSync } = require('child_process');
         gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: basePath, encoding: 'utf-8' }).trim();
       } catch { /* not a git repo */ }
-      json({ name: config.teepee.name, path: basePath, language: config.teepee.language, gitBranch });
+      json({
+        name: config.teepee.name,
+        path: basePath,
+        language: config.teepee.language,
+        gitBranch,
+        demo: config.teepee.demo,
+      });
       return;
     }
 
@@ -447,10 +514,26 @@ export function startServer(
   // ── WebSocket ──
 
   const server = http.createServer(httpHandler);
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    const user = authenticateRequest(req);
+    if (!user) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
+    });
+  });
 
   wss.on('connection', (ws, req) => {
     const user = authenticateRequest(req);
+    if (!user) {
+      ws.close(1008, 'Not authenticated');
+      return;
+    }
     const client: ClientState = {
       ws,
       user,
@@ -462,11 +545,6 @@ export function startServer(
     ws.on('message', async (raw) => {
       try {
         const event = JSON.parse(raw.toString());
-
-        if (!client.user) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
-          return;
-        }
 
         switch (event.type) {
           case 'topic.join': {

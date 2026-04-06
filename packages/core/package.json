@@ -1,12 +1,25 @@
 {
-  "name": "@teepee/core",
-  "version": "0.1.0",
+  "name": "teepee-core",
+  "version": "0.1.1",
+  "description": "Core orchestration and storage primitives for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
   },
+  "homepage": "https://teepee.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/teepee-org/teepee.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "yaml": "^2.4.0"

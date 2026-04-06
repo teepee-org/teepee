@@ -4,7 +4,7 @@ import { ChatView } from './components/ChatView';
 import { InvitePage } from './components/InvitePage';
 import { AdminPage } from './components/AdminPage';
 import { useWebSocket } from './useWebSocket';
-import { fetchTopics, fetchAgents, fetchProject, createTopic } from './api';
+import { fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage } from './api';
 import type { ProjectInfo } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
 
@@ -22,6 +22,26 @@ interface AuthUser {
   role: string;
 }
 
+interface DemoRunState {
+  topicId: number;
+  nextPromptIndex: number;
+  baselineMessageCount: number;
+  sawActivity: boolean;
+}
+
+const DEMO_PATH_MATCH = window.location.pathname.match(/^\/demo(?:\/([^/]+))?\/?$/);
+const DEMO_SEARCH_PARAMS = new URLSearchParams(window.location.search);
+const DEMO_MODE_FROM_URL = Boolean(DEMO_PATH_MATCH) || DEMO_SEARCH_PARAMS.get('demo') === '1';
+const DEMO_TOPIC_NAME_FROM_URL =
+  decodeURIComponent(DEMO_PATH_MATCH?.[1] || '') || DEMO_SEARCH_PARAMS.get('demo_topic') || '';
+const DEMO_HOTKEY_FROM_URL = DEMO_SEARCH_PARAMS.get('demo_hotkey') || '';
+const DEMO_SETTLE_DELAY_MS_FROM_URL = Number(DEMO_SEARCH_PARAMS.get('demo_delay_ms') || 0);
+const DEMO_PROMPTS = [
+  '@coder @reviewer @architect introduce yourselves in one short sentence. Say only your role and what you do best.',
+  '@reviewer review this workspace and give me 2 concrete findings with file references.',
+  '@architect propose 1 small but worthwhile feature for this workspace, then turn it into a concrete task for "@coder".',
+];
+
 export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -32,6 +52,8 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [demoRun, setDemoRun] = useState<DemoRunState | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   // Check if on invite page
   const inviteToken = window.location.pathname.match(/^\/invite\/([a-f0-9]+)$/)?.[1];
@@ -63,6 +85,22 @@ export function App() {
       document.title = `${p.name} — Teepee`;
     });
   }, [authUser]);
+
+  const demoEnabled = DEMO_MODE_FROM_URL || Boolean(project?.demo?.enabled);
+  const demoTopicName =
+    DEMO_TOPIC_NAME_FROM_URL ||
+    project?.demo?.topic_name ||
+    'hn-live-demo';
+  const demoHotkey =
+    DEMO_HOTKEY_FROM_URL ||
+    project?.demo?.hotkey ||
+    'F1';
+  const demoDelayMs =
+    (Number.isFinite(DEMO_SETTLE_DELAY_MS_FROM_URL) && DEMO_SETTLE_DELAY_MS_FROM_URL > 0
+      ? DEMO_SETTLE_DELAY_MS_FROM_URL
+      : 0) ||
+    project?.demo?.delay_ms ||
+    1200;
 
   // WebSocket event handler
   const onEvent = useCallback(
@@ -199,6 +237,99 @@ export function App() {
     setTopics((prev) => [...prev, { ...topic, language: null, archived: 0 }]);
     handleSelectTopic(topic.id);
   }, [handleSelectTopic]);
+
+  const sleep = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
+
+  const startDemoAutoplay = useCallback(async () => {
+    if (!demoEnabled || demoBusy || !authUser) return;
+
+    setDemoBusy(true);
+    try {
+      const topicList = await fetchTopics();
+      const existing = topicList.find((topic) => topic.name === demoTopicName);
+      let topicId: number;
+
+      if (existing) {
+        topicId = existing.id;
+      } else {
+        const created = await createTopic(demoTopicName);
+        topicId = created.id;
+        setTopics((prev) => {
+          if (prev.some((topic) => topic.id === created.id)) return prev;
+          return [...prev, { ...created, language: null, archived: 0 }];
+        });
+      }
+
+      handleSelectTopic(topicId);
+      await sleep(250);
+      const history = await fetchMessages(topicId, 200);
+      const firstPrompt = DEMO_PROMPTS[0];
+      await postMessage(topicId, firstPrompt);
+      setDemoRun({
+        topicId,
+        nextPromptIndex: 1,
+        baselineMessageCount: history.length + 1,
+        sawActivity: false,
+      });
+    } finally {
+      setDemoBusy(false);
+    }
+  }, [authUser, demoBusy, demoEnabled, demoTopicName, handleSelectTopic, sleep]);
+
+  useEffect(() => {
+    if (!demoRun) return;
+    if (activeTopicId !== demoRun.topicId) return;
+
+    if (!demoRun.sawActivity) {
+      if (activeJobs.length > 0 || messages.length > demoRun.baselineMessageCount) {
+        setDemoRun((prev) => (prev ? { ...prev, sawActivity: true } : prev));
+      }
+      return;
+    }
+
+    if (activeJobs.length > 0) return;
+
+    if (demoRun.nextPromptIndex >= DEMO_PROMPTS.length) {
+      setDemoRun(null);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      const prompt = DEMO_PROMPTS[demoRun.nextPromptIndex];
+      postMessage(demoRun.topicId, prompt)
+        .then(() => {
+          setDemoRun((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  nextPromptIndex: prev.nextPromptIndex + 1,
+                  baselineMessageCount: messages.length + 1,
+                  sawActivity: false,
+                }
+              : prev
+          );
+        })
+        .catch((error) => {
+          console.error('demo autoplay failed', error);
+          setDemoRun(null);
+        });
+    }, demoDelayMs);
+
+    return () => window.clearTimeout(timeout);
+  }, [activeJobs.length, activeTopicId, demoDelayMs, demoRun, messages.length]);
+
+  useEffect(() => {
+    if (!demoEnabled || !authUser) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== demoHotkey) return;
+      event.preventDefault();
+      startDemoAutoplay();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authUser, demoEnabled, demoHotkey, startDemoAutoplay]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -387,6 +518,18 @@ export function App() {
         <div className="user-section">
           <span className="user-handle">{authUser.handle}</span>
           <span className="user-role">{authUser.role}</span>
+          {demoEnabled && authUser.role === 'owner' && (
+            <button
+              className="admin-btn"
+              onClick={() => {
+                void startDemoAutoplay();
+              }}
+              title={`Run demo prompts (${demoHotkey})`}
+              disabled={demoBusy || !!demoRun}
+            >
+              Demo {demoHotkey}
+            </button>
+          )}
           {authUser.role === 'owner' && (
             <button className="admin-btn" onClick={() => setShowAdmin(true)} title="Admin">
               Admin
@@ -408,6 +551,12 @@ export function App() {
           <div className="empty-state">
             <h2>Select a topic to start</h2>
             <p>Or create a new one with +</p>
+            {demoEnabled && authUser.role === 'owner' && (
+              <p>
+                Demo mode is on. Press {demoHotkey} or click the Demo button to send the prompt sequence to
+                {' '}{demoTopicName}.
+              </p>
+            )}
           </div>
         )}
       </main>

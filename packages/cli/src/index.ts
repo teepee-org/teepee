@@ -10,14 +10,14 @@ import {
   setPermission,
   createInviteToken,
   revokeUserFull,
-} from '@teepee/core';
-import { startServer } from '@teepee/server';
+} from 'teepee-core';
+import { startServer } from 'teepee-server';
 
 const args = process.argv.slice(2);
 const command = args[0];
 
-const configPath = path.resolve(process.cwd(), 'teepee.yaml');
 const dbDir = path.resolve(process.cwd(), '.teepee');
+const configPath = path.join(dbDir, 'config.yaml');
 const dbPath = path.join(dbDir, 'db.sqlite');
 const pidFile = path.join(dbDir, 'pid');
 
@@ -27,6 +27,10 @@ function ensureDir() {
 
 function usage() {
   console.log(`Teepee — AI agent coordination layer
+
+Package:
+  npx teepee-cli <command>
+  teepee <command>               Once installed globally
 
 Usage:
   teepee start [--port <port>]    Start server
@@ -50,6 +54,8 @@ switch (command) {
     const portIdx = args.indexOf('--port');
     const port = portIdx !== -1 ? parseInt(args[portIdx + 1]) : 3000;
 
+    ensureDir();
+
     if (!fs.existsSync(configPath)) {
       // Generate template config
       const template = `teepee:
@@ -58,7 +64,7 @@ switch (command) {
 
 providers:
   claude:
-    command: "claude --print"
+    command: "claude -p --permission-mode acceptEdits"
 
 agents:
   coder:
@@ -67,12 +73,11 @@ agents:
     provider: claude
 `;
       fs.writeFileSync(configPath, template);
-      console.log('Created teepee.yaml with default config.');
+      console.log('Created .teepee/config.yaml with default config.');
       console.log('Edit it, then run: teepee start');
       break;
     }
 
-    ensureDir();
     const { server } = startServer(configPath, port);
 
     // Save PID
@@ -231,7 +236,7 @@ agents:
   }
 
   case 'update': {
-    console.log('Check for updates: npm update -g teepee');
+    console.log('Check for updates: npm install -g teepee-cli@latest');
     break;
   }
 

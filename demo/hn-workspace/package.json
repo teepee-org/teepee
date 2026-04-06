@@ -1,0 +1,9 @@
+{
+  "name": "teepee-hn-demo-workspace",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  }
+}

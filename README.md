@@ -4,22 +4,26 @@
 
 Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another — chaining happens automatically.
 
+Agents can also hand off work to each other: one agent writes the task, tags the next, and execution continues automatically.
+
 ```
-npx teepee start
+npx teepee-cli start
 ```
+
+The npm package is `teepee-cli`. If you install it globally, it exposes the `teepee` binary.
 
 ## Quick start
 
 **1. Create a config**
 
 ```yaml
-# teepee.yaml
+# .teepee/config.yaml
 teepee:
   name: my-project
 
 providers:
   claude:
-    command: "claude --print"
+    command: "claude -p --permission-mode acceptEdits"
 
 agents:
   coder:
@@ -31,7 +35,7 @@ agents:
 **2. Start**
 
 ```bash
-npx teepee start
+npx teepee-cli start
 ```
 
 Open the owner link printed in the terminal. Create a topic, start chatting.
@@ -47,6 +51,7 @@ Open the owner link printed in the terminal. Create a topic, start chatting.
 ```
 
 Agents respond in real time with streaming output.
+If the provider supports editing and shell actions, agents can modify files in the project working directory.
 
 ## Features
 
@@ -78,14 +83,22 @@ reviewer> Found a bug. @coder please fix the null check
 
 ## Configuration
 
+Teepee reads its project config from `.teepee/config.yaml`.
+
 ```yaml
 teepee:
   name: my-project
   language: en           # agent response language
 
+server:
+  trust_proxy: false
+  cors_allowed_origins: []          # optional extra origins for cross-origin API access
+  auth_rate_limit_window_seconds: 60
+  auth_rate_limit_max_requests: 20
+
 providers:
   claude:
-    command: "claude --print"
+    command: "claude -p --permission-mode acceptEdits"
     timeout_seconds: 120
   codex:
     command: "codex exec"
@@ -97,7 +110,7 @@ agents:
     provider: claude
   reviewer:
     provider: claude
-    prompt: "./agents/reviewer.md"    # custom prompt file
+    prompt: "./agents/reviewer.md"    # custom prompt file, relative to the project root
   architect:
     provider: codex
 
@@ -145,6 +158,9 @@ Click **Admin** in the sidebar (owner only) to:
 - No passwords. Auth is session-based (cookie) with magic links.
 - On localhost without HTTPS, the session cookie is not marked `Secure` — this is fine for local development.
 - For production/public access, **always use HTTPS** via a reverse proxy. Teepee sets the `Secure` cookie flag when it detects `X-Forwarded-Proto: https`.
+- `server.trust_proxy` is `false` by default. Enable it only when Teepee is behind a proxy you control that overwrites `X-Forwarded-*` headers.
+- CORS is same-origin by default. Use `server.cors_allowed_origins` only if you intentionally need cross-origin access.
+- Public auth endpoints have a basic in-memory rate limit to slow repeated token or owner-secret attempts.
 - The owner secret link is printed to stdout at startup. Treat it like a password — do not share it.
 
 ## Reverse proxy (HTTPS)
@@ -156,7 +172,7 @@ For public access, put Teepee behind a reverse proxy:
 caddy reverse-proxy --from teepee.example.com --to localhost:3000
 ```
 
-Teepee reads `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` automatically. When behind HTTPS, session cookies are marked `Secure`.
+If you run Teepee behind a reverse proxy, set `server.trust_proxy: true` so forwarded protocol, host, and client IP are read from the proxy headers. When behind HTTPS, session cookies are marked `Secure`.
 
 ## Architecture
 
@@ -166,7 +182,7 @@ Browser (Web UI)
 Teepee Server (Node.js)
     ↕ SQLite
     ↕ spawn
-Agent CLI (claude --print, codex exec, ...)
+Agent CLI (claude -p, codex exec, ...)
 ```
 
 - **Backend**: TypeScript, Node.js, SQLite
@@ -178,8 +194,8 @@ Agent CLI (claude --print, codex exec, ...)
 One Teepee = one project. To work on multiple projects, run multiple instances on different ports:
 
 ```bash
-cd ~/api && teepee start --port 3000
-cd ~/web && teepee start --port 3001
+cd ~/api && npx teepee-cli start --port 3000
+cd ~/web && npx teepee-cli start --port 3001
 ```
 
 ## Adding an agent
@@ -190,8 +206,12 @@ Any command that reads from stdin and writes to stdout works:
 agents:
   my-agent:
     provider: my-provider
-    prompt: "./prompts/my-agent.md"   # optional
+    prompt: "./prompts/my-agent.md"   # optional, relative to the project root
 ```
+
+If `agents.<name>.prompt` is omitted, Teepee automatically looks for `default-prompts/<name>.md`.
+If that file does not exist, it falls back to `default-prompts/default.md`.
+Prompt paths are resolved relative to the project root.
 
 The agent receives context on stdin in this format:
 
@@ -208,6 +228,8 @@ You must answer in <language>.
 [current]
 <triggering message>
 ```
+
+Provider commands run in the Teepee project working directory. If your provider CLI supports editing files and running shell commands, agents can modify the codebase directly.
 
 ## License
 

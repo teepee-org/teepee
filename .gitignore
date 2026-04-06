@@ -1,6 +1,7 @@
 node_modules/
 dist/
-.teepee/
+**/.teepee/*
+!**/.teepee/config.yaml
 *.sqlite
 *.db
 .DS_Store

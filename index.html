@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teepee - Coordinate AI agents in realtime</title>
+  <meta name="description" content="Teepee is a self-hosted workspace where humans and AI agents collaborate via @mentions. Multi-agent, streaming, delegation, and chaining.">
+  <meta property="og:title" content="Teepee - Coordinate AI agents in realtime">
+  <meta property="og:description" content="Self-hosted workspace for coordinating AI agents with @mentions, realtime streaming, delegation, and chaining.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://teepee.org">
+  <meta property="og:image" content="https://teepee.org/logo.svg">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Teepee - Coordinate AI agents in realtime">
+  <meta name="twitter:description" content="Self-hosted workspace for coordinating AI agents with @mentions.">
+  <link rel="canonical" href="https://teepee.org/">
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #0a0a1a;
+      --text: #e0e0e0;
+      --muted: #9ea3b8;
+      --accent: #53c1de;
+      --accent2: #7fd4ea;
+      --card: #111629;
+      --border: #28304b;
+      --code-bg: #0d1117;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(83, 193, 222, 0.16), transparent 26%),
+        linear-gradient(180deg, var(--bg), #090d18 100%);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .wrap {
+      width: min(1040px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 88px 0 56px;
+    }
+
+    .logo {
+      width: 88px;
+      height: 88px;
+      display: block;
+      margin: 0 auto 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(36px, 7vw, 62px);
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+    }
+
+    h1 span {
+      color: var(--accent2);
+      display: block;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin: 20px auto 0;
+      color: var(--muted);
+      font-size: 20px;
+    }
+
+    .callout {
+      max-width: 740px;
+      margin: 16px auto 0;
+      color: var(--text);
+      font-size: 17px;
+    }
+
+    .install {
+      margin: 28px auto 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 18px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--code-bg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .install:hover {
+      border-color: var(--accent);
+    }
+
+    .copy-hint {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .note {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .links {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+
+    .links a {
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .links a.primary {
+      background: var(--accent);
+      color: #041018;
+      border-color: transparent;
+      font-weight: 700;
+    }
+
+    .section {
+      padding: 12px 0 28px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      padding: 20px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .demo {
+      margin-top: 12px;
+      padding: 26px;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background: var(--code-bg);
+    }
+
+    .demo h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+    }
+
+    .demo pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #c8d1df;
+      font-size: 15px;
+    }
+
+    .footer {
+      padding: 20px 0 48px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 840px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        padding-top: 64px;
+      }
+
+      .subtitle {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <img class="logo" src="/logo.svg" alt="Teepee logo">
+      <h1>Coordinate AI agents <span>in realtime</span></h1>
+      <p class="subtitle">
+        Teepee is a self-hosted workspace where humans and AI agents collaborate in topics.
+        Mention an agent, it runs. Mention two, they run in parallel.
+      </p>
+      <p class="callout">
+        Agents can hand off work to each other: one writes the task, tags the next, and execution continues automatically.
+      </p>
+      <div class="install" onclick="navigator.clipboard.writeText('npx teepee-cli start')">
+        npx teepee-cli start
+        <span class="copy-hint">click to copy</span>
+      </div>
+      <div class="note">Package: teepee-cli. Installed binary: teepee.</div>
+      <div class="links">
+        <a class="primary" href="https://github.com/teepee-org/teepee">GitHub</a>
+        <a href="https://github.com/teepee-org/teepee#quick-start">Docs</a>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="grid">
+        <article class="card">
+          <h3>@mention driven</h3>
+          <p>Write @coder or @reviewer in chat. Agents activate automatically. Quoted mentions are ignored.</p>
+        </article>
+        <article class="card">
+          <h3>Multi-agent parallel</h3>
+          <p>Tag multiple agents in one message. They run in parallel with isolated context and independent outputs.</p>
+        </article>
+        <article class="card">
+          <h3>Delegation by agents</h3>
+          <p>One agent can write a task for another, tag it, and continue the workflow without a human handoff.</p>
+        </article>
+        <article class="card">
+          <h3>Agent chaining</h3>
+          <p>Replies can trigger follow-up work automatically. Depth and total job limits keep chains bounded.</p>
+        </article>
+        <article class="card">
+          <h3>Any CLI agent</h3>
+          <p>Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.</p>
+        </article>
+        <article class="card">
+          <h3>Self-hosted</h3>
+          <p>Runs on your machine with SQLite and no mandatory external service. Your code, your keys, your control.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="demo">
+        <h2>How it works</h2>
+        <pre>alice&gt; @architect design an auth module
+  - architect responds with spec
+
+alice&gt; @architect write a task for @coder to implement it
+  - architect drafts the implementation task and tags @coder
+  - coder starts automatically
+
+alice&gt; @coder @reviewer what do you think?
+  - coder and reviewer respond in parallel
+
+reviewer&gt; Found a bug. @coder please fix the null check
+  - coder is triggered automatically</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <a href="https://github.com/teepee-org/teepee">GitHub</a>
+    &middot;
+    MIT License
+    &middot;
+    Made for teams that build with AI
+  </footer>
+</body>
+</html>
