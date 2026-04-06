@@ -1,8 +1,8 @@
 # Teepee
 
-**Coordinate AI agents in realtime with @mentions.**
+**Coordinate AI agents with @mentions.**
 
-Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another — chaining happens automatically.
+Teepee is a self-hosted workspace for real project work with AI agents. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
 
 Agents can also hand off work to each other: one agent writes the task, tags the next, and execution continues automatically.
 
@@ -13,6 +13,16 @@ npx teepee-cli start
 ```
 
 The npm package is `teepee-cli`. If you install it globally, it exposes the `teepee` binary.
+
+## Why Teepee
+
+Teepee is for the moment when "open a few terminals and coordinate agents by hand" stops scaling.
+
+- Keep humans and agents in the same topic-based workspace
+- Trigger agents with `@mentions` instead of bespoke scripts
+- Let agents delegate work to each other in public, auditable conversation
+- Mix providers like Claude, Codex, and local models in one project
+- Keep everything self-hosted and close to the codebase
 
 ## Quick start
 
@@ -58,6 +68,13 @@ Open the owner link printed in the terminal. Create a topic, start chatting.
 
 Agents respond in real time with streaming output.
 If the provider supports editing and shell actions, agents can modify files in the project working directory.
+
+## Good fits
+
+- Coordinating a small team of coding agents in one repo
+- Review + implementation + architecture loops in the same workspace
+- Self-hosted local workflows where you want auditability and control
+- Mixed-provider setups where different agents use different CLIs
 
 ## Features
 
