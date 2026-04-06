@@ -4,11 +4,11 @@ teepee:
 
 providers:
   claude:
-    command: "claude -p --permission-mode acceptEdits"
-    timeout_seconds: 300
+    command: "claude -p --permission-mode bypassPermissions --dangerously-skip-permissions"
+    timeout_seconds: 900
   codex:
-    command: "codex exec"
-    timeout_seconds: 120
+    command: "codex exec --dangerously-bypass-approvals-and-sandbox"
+    timeout_seconds: 900
 
 agents:
   coder:
@@ -16,4 +16,6 @@ agents:
   reviewer:
     provider: claude
   architect:
+    provider: codex
+  devops:
     provider: codex

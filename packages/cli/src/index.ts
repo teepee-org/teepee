@@ -115,18 +115,20 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('    provider: claude');
     agentLines.push('  architect:');
     agentLines.push('    provider: codex');
+    agentLines.push('  devops:');
+    agentLines.push('    provider: codex');
   } else if (hasClaude) {
-    for (const agentName of ['coder', 'reviewer', 'architect']) {
+    for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
       agentLines.push(`  ${agentName}:`);
       agentLines.push('    provider: claude');
     }
   } else if (hasCodex) {
-    for (const agentName of ['coder', 'reviewer', 'architect']) {
+    for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
       agentLines.push(`  ${agentName}:`);
       agentLines.push('    provider: codex');
     }
   } else if (hasOllama) {
-    for (const agentName of ['coder', 'reviewer', 'architect']) {
+    for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
       agentLines.push(`  ${agentName}:`);
       agentLines.push('    provider: ollama');
     }
@@ -142,6 +144,8 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('  # reviewer:');
     agentLines.push('  #   provider: claude');
     agentLines.push('  # architect:');
+    agentLines.push('  #   provider: codex');
+    agentLines.push('  # devops:');
     agentLines.push('  #   provider: codex');
   }
 

@@ -56,6 +56,8 @@ agents:
     provider: claude
   architect:
     provider: codex
+  devops:
+    provider: codex
 ```
 
 **2. Start**
@@ -94,6 +96,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - Coordinating a small team of coding agents in one repo
 - Inviting human teammates into the same workspace instead of coordinating in a separate chat tool
 - Review + implementation + architecture loops in the same workspace
+- Release and operational workflows in the same workspace with a dedicated `@devops` agent
 - Self-hosted local workflows where you want auditability and control
 - Mixed-provider setups where different agents use different CLIs
 
@@ -104,6 +107,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Agent chaining** — An agent's reply can mention another agent, triggering automatic follow-up. Configurable depth limits prevent loops.
 - **Human + agent collaboration** — Invite teammates with magic links, assign roles, and keep humans and agents in the same workspace.
 - **Works on the real project** — Agents run in the project working directory, so they can read files, make changes, and keep the workflow attached to the codebase itself.
+- **Specialized roles** — Split work across `@coder`, `@reviewer`, `@architect`, `@devops`, or your own custom agents with per-agent prompts.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
 - **Realtime streaming** — Agent output streams token-by-token via WebSocket.
 - **Self-hosted** — Runs on your machine. Your code, your API keys, your control.
@@ -159,6 +163,8 @@ agents:
     provider: claude
     prompt: "./agents/reviewer.md"    # custom prompt file, relative to the project root
   architect:
+    provider: codex
+  devops:
     provider: codex
 
 limits:

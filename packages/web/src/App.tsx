@@ -490,6 +490,7 @@ export function App() {
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
+          <span className={`connection-dot ${connected ? 'connected' : ''}`} />
           <div className="project-info">
             <h1>{project?.name || 'Teepee'}</h1>
             {project && (
@@ -499,7 +500,6 @@ export function App() {
               </span>
             )}
           </div>
-          <span className={`connection-dot ${connected ? 'connected' : ''}`} />
         </div>
         <TopicList
           topics={topics}
