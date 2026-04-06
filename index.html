@@ -218,7 +218,7 @@
         Invite teammates, assign roles, and coordinate work with @mentions.
       </p>
       <p class="callout">
-        Use it when “open three terminals and coordinate agents by hand” stops scaling. Agents can hand off work to each other: one writes the task, tags the next, and execution continues automatically.
+        Use it when “open three terminals and coordinate agents by hand” stops scaling. This is not just chat: Teepee sits on top of a real project, so coding agents can work on the codebase underneath while staying in shared context with humans.
       </p>
       <p class="note">Teepee is a product by TypeEffect.</p>
       <div class="install" onclick="navigator.clipboard.writeText('npx teepee-cli start')">
@@ -257,6 +257,10 @@
         <article class="card">
           <h3>Self-hosted</h3>
           <p>Runs on your machine with SQLite and no mandatory external service. Your code, your keys, your control.</p>
+        </article>
+        <article class="card">
+          <h3>Works on the real project</h3>
+          <p>Agents do not just reply in chat. They run in the project working directory, so they can read files, make changes, and continue the workflow in place.</p>
         </article>
         <article class="card">
           <h3>Any CLI agent</h3>

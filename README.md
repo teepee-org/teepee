@@ -4,6 +4,8 @@
 
 Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Invite teammates, assign roles, and coordinate work with @mentions. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
 
+This is not just chat. Teepee sits on top of a real project, so coding agents can work on the codebase underneath while humans stay in the same shared context.
+
 Agents can also hand off work to each other: one agent writes the task, tags the next, and execution continues automatically.
 
 Teepee is a product by TypeEffect.
@@ -24,6 +26,7 @@ Teepee is for the moment when "open a few terminals and coordinate agents by han
 - Let agents delegate work to each other in public, auditable conversation
 - Mix providers like Claude, Codex, and local models in one project
 - Keep everything self-hosted and close to the codebase
+- Let coding agents operate in the real project working directory instead of only replying in chat
 
 ## Quick start
 
@@ -84,6 +87,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Multi-agent parallel** — Tag multiple agents in one message. They run simultaneously with isolated context.
 - **Agent chaining** — An agent's reply can mention another agent, triggering automatic follow-up. Configurable depth limits prevent loops.
 - **Human + agent collaboration** — Invite teammates with magic links, assign roles, and keep humans and agents in the same workspace.
+- **Works on the real project** — Agents run in the project working directory, so they can read files, make changes, and keep the workflow attached to the codebase itself.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
 - **Realtime streaming** — Agent output streams token-by-token via WebSocket.
 - **Self-hosted** — Runs on your machine. Your code, your API keys, your control.
