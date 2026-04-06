@@ -1,4 +1,5 @@
 import type { Topic, Agent, Message } from './types';
+import type { ProjectResponse, StatusResponse } from 'teepee-core';
 
 const BASE = '/api';
 
@@ -37,18 +38,7 @@ export async function postMessage(
   return res.json();
 }
 
-export interface ProjectInfo {
-  name: string;
-  path: string;
-  language: string;
-  gitBranch: string | null;
-  demo: {
-    enabled: boolean;
-    topic_name: string;
-    hotkey: string;
-    delay_ms: number;
-  };
-}
+export type ProjectInfo = ProjectResponse;
 
 export async function fetchProject(): Promise<ProjectInfo> {
   const res = await fetch(`${BASE}/project`);
@@ -60,12 +50,7 @@ export async function fetchAgents(): Promise<Agent[]> {
   return res.json();
 }
 
-export async function fetchStatus(): Promise<{
-  name: string;
-  topics: number;
-  agents: number;
-  users: number;
-}> {
+export async function fetchStatus(): Promise<StatusResponse> {
   const res = await fetch(`${BASE}/status`);
   return res.json();
 }

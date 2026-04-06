@@ -19,9 +19,10 @@ interface Props {
   agents: Agent[];
   activeJobs: ActiveJob[];
   onSend: (text: string) => void;
+  onMenuToggle?: () => void;
 }
 
-export function ChatView({ topicId, topicName, messages, agents, activeJobs, onSend }: Props) {
+export function ChatView({ topicId, topicName, messages, agents, activeJobs, onSend, onMenuToggle }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
@@ -44,6 +45,15 @@ export function ChatView({ topicId, topicName, messages, agents, activeJobs, onS
   return (
     <div className="chat-view">
       <div className="chat-header">
+        {onMenuToggle && (
+          <button className="mobile-menu-btn" onClick={onMenuToggle} aria-label="Menu">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <rect y="3" width="20" height="2" rx="1"/>
+              <rect y="9" width="20" height="2" rx="1"/>
+              <rect y="15" width="20" height="2" rx="1"/>
+            </svg>
+          </button>
+        )}
         <h2>#{topicId} {topicName}</h2>
       </div>
       <div

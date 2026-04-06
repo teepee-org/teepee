@@ -52,6 +52,7 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [demoRun, setDemoRun] = useState<DemoRunState | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
 
@@ -225,6 +226,7 @@ export function App() {
       setActiveTopicId(topicId);
       setMessages([]);
       setActiveJobs([]);
+      setSidebarOpen(false);
       send({ type: 'topic.join', topicId });
     },
     [activeTopicId, send]
@@ -448,7 +450,7 @@ export function App() {
 
   // Admin page (full screen)
   if (showAdmin && authUser?.role === 'owner') {
-    return <AdminPage agents={agents} onBack={() => setShowAdmin(false)} />;
+    return <AdminPage agents={agents} onBack={() => { setShowAdmin(false); setSidebarOpen(false); }} />;
   }
 
   // Loading
@@ -486,7 +488,8 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="project-info">
             <h1>{project?.name || 'Teepee'}</h1>
@@ -531,7 +534,7 @@ export function App() {
             </button>
           )}
           {authUser.role === 'owner' && (
-            <button className="admin-btn" onClick={() => setShowAdmin(true)} title="Admin">
+            <button className="admin-btn" onClick={() => { setSidebarOpen(false); setShowAdmin(true); }} title="Admin">
               Admin
             </button>
           )}
@@ -543,12 +546,20 @@ export function App() {
             topicId={activeTopic.id}
             topicName={activeTopic.name}
             messages={messages}
+            onMenuToggle={() => setSidebarOpen(true)}
             agents={agents}
             activeJobs={activeJobs}
             onSend={handleSend}
           />
         ) : (
           <div className="empty-state">
+            <button className="mobile-menu-btn empty-menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+              <svg width="24" height="24" viewBox="0 0 20 20" fill="currentColor">
+                <rect y="3" width="20" height="2" rx="1"/>
+                <rect y="9" width="20" height="2" rx="1"/>
+                <rect y="15" width="20" height="2" rx="1"/>
+              </svg>
+            </button>
             <h2>Select a topic to start</h2>
             <p>Or create a new one with +</p>
             {demoEnabled && authUser.role === 'owner' && (

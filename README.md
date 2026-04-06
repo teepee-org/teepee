@@ -6,6 +6,8 @@ Teepee is a self-hosted workspace where humans and AI agents collaborate in topi
 
 Agents can also hand off work to each other: one agent writes the task, tags the next, and execution continues automatically.
 
+Teepee is a product by TypeEffect.
+
 ```
 npx teepee-cli start
 ```

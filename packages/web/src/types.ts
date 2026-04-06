@@ -1,24 +1,16 @@
-export interface Message {
-  id: number;
-  topic_id: number;
-  author_type: 'user' | 'agent' | 'system';
-  author_name: string;
-  body: string;
-  created_at: string;
-}
+// Re-export shared protocol types from teepee-core.
+// Using `import type` to avoid bundling any runtime code from core.
+import type { MessageRow } from 'teepee-core';
+import type { ServerEvent as CoreServerEvent } from 'teepee-core';
+import type { TopicResponse, AgentResponse } from 'teepee-core';
 
-export interface Topic {
-  id: number;
-  name: string;
-  language: string | null;
-  archived: number;
-}
+// Domain aliases — keep the names the web codebase already uses.
+export type Message = MessageRow;
+export type Topic = TopicResponse;
+export type Agent = AgentResponse;
+export type ServerEvent = CoreServerEvent;
 
-export interface Agent {
-  name: string;
-  provider: string;
-}
-
+// Job is UI-only state (not in protocol — it's derived from events)
 export interface Job {
   id: number;
   batch_id: number;
@@ -27,13 +19,3 @@ export interface Job {
   output_message_id: number | null;
   error: string | null;
 }
-
-export type ServerEvent =
-  | { type: 'topic.history'; topicId: number; messages: Message[] }
-  | { type: 'message.created'; topicId: number; message: Message }
-  | { type: 'message.stream'; topicId: number; jobId: number; chunk: string }
-  | { type: 'agent.job.started'; topicId: number; jobId: number; agentName: string }
-  | { type: 'agent.job.completed'; topicId: number; jobId: number; agentName: string; message: Message }
-  | { type: 'agent.job.failed'; topicId: number; jobId: number; agentName: string; error: string }
-  | { type: 'system'; topicId: number; text: string }
-  | { type: 'error'; message: string };
