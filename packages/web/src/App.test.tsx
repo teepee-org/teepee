@@ -77,6 +77,38 @@ async function renderApp() {
   return result!;
 }
 
+describe('/help command', () => {
+  async function openTopic() {
+    await renderApp();
+    const topicItem = screen.getByText('#1 test-topic');
+    await act(async () => { fireEvent.click(topicItem); });
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type a message/)).toBeTruthy();
+    });
+  }
+
+  it('inserts a markdown help message with headings and list items', async () => {
+    await openTopic();
+    const input = screen.getByPlaceholderText(/Type a message/);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '/help' } });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    });
+    // Should render markdown headings, not raw asterisks
+    await waitFor(() => {
+      expect(screen.getByText('Commands')).toBeTruthy();
+    });
+    // Should render as structured list items, not a <pre> block
+    const helpContainer = screen.getByText('Commands').closest('.message');
+    expect(helpContainer).toBeTruthy();
+    expect(helpContainer!.classList.contains('system-rich')).toBe(true);
+    // Check list items are rendered
+    expect(helpContainer!.querySelectorAll('li').length).toBeGreaterThan(0);
+    // No <pre> inside the help — it should be rendered markdown
+    expect(helpContainer!.querySelector('.message-body > pre')).toBeNull();
+  });
+});
+
 describe('Mobile sidebar drawer state', () => {
   it('sidebar starts without "open" class', async () => {
     await renderApp();

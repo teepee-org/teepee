@@ -1,6 +1,6 @@
 {
   "name": "teepee-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "HTTP and WebSocket server for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,7 +8,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/prepare-web-dist.cjs",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run"
   },

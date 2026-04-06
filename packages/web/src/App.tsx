@@ -7,6 +7,7 @@ import { useWebSocket } from './useWebSocket';
 import { fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage } from './api';
 import type { ProjectInfo } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
+import { buildHelpMarkdown } from './buildHelpMarkdown';
 
 interface ActiveJob {
   jobId: number;
@@ -349,18 +350,7 @@ export function App() {
                 topic_id: activeTopicId ?? 0,
                 author_type: 'system' as const,
                 author_name: 'teepee',
-                body: [
-                  '**Commands:**',
-                  '`/topics` — list topics',
-                  '`/join <id>` — switch to topic',
-                  '`/new <name>` — create topic',
-                  '`/topic rename <name>` — rename current topic',
-                  '`/topic language <lang>` — set topic language',
-                  '`/topic archive` — archive current topic',
-                  '`/alias @agent @short` — create alias',
-                  '`/agents` — list available agents',
-                  '`/help` — this message',
-                ].join('\n'),
+                body: buildHelpMarkdown(),
                 created_at: new Date().toISOString(),
               },
             ]);

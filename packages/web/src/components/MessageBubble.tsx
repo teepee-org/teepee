@@ -11,9 +11,10 @@ export function MessageBubble({ message }: Props) {
   const [showRaw, setShowRaw] = useState(false);
   const isSystem = message.author_type === 'system';
   const isAgent = message.author_type === 'agent';
+  const isRichSystem = isSystem && message.body.includes('\n');
 
   return (
-    <div className={`message ${message.author_type}`}>
+    <div className={`message ${message.author_type}${isRichSystem ? ' system-rich' : ''}`}>
       <div className="message-header">
         <span className={`author ${message.author_type}`}>
           {isAgent && '🤖 '}
@@ -34,7 +35,7 @@ export function MessageBubble({ message }: Props) {
         )}
       </div>
       <div className="message-body">
-        {showRaw || isSystem ? (
+        {showRaw || (isSystem && !isRichSystem) ? (
           <pre className="raw">{message.body}</pre>
         ) : (
           <ReactMarkdown

@@ -21,7 +21,18 @@ export function handleStaticFile(
   res: http.ServerResponse,
   url: URL
 ): boolean {
-  const webDist = path.resolve(__dirname, '../../../web/dist');
+  const candidates = [
+    path.resolve(__dirname, '../web'),
+    path.resolve(__dirname, '../../../web/dist'),
+  ];
+  const webDist = candidates.find((candidate) => fs.existsSync(path.join(candidate, 'index.html')));
+
+  if (!webDist) {
+    res.writeHead(500);
+    res.end('Teepee web assets not found');
+    return true;
+  }
+
   let filePath = path.join(webDist, url.pathname === '/' ? 'index.html' : url.pathname);
 
   if (!filePath.startsWith(webDist)) {
