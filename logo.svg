@@ -2,7 +2,7 @@
   <defs>
     <mask id="moon-cutout">
       <rect width="100" height="100" fill="white"/>
-      <circle cx="79" cy="16" r="9" fill="black"/>
+      <circle cx="79" cy="18" r="10" fill="black"/>
     </mask>
   </defs>
 
