@@ -65,12 +65,16 @@ switch (command) {
 providers:
   claude:
     command: "claude -p --permission-mode acceptEdits"
+  codex:
+    command: "codex exec"
 
 agents:
   coder:
     provider: claude
   reviewer:
     provider: claude
+  architect:
+    provider: codex
 `;
       fs.writeFileSync(configPath, template);
       console.log('Created .teepee/config.yaml with default config.');
