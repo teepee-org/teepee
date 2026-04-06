@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.svg" alt="Teepee logo" width="100" height="100">
+</p>
+
 # Teepee
 
 **Coordinate AI agents with @mentions.**
