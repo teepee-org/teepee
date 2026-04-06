@@ -2,6 +2,8 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as https from 'https';
 import {
   loadConfig,
   openDb,
@@ -20,9 +22,27 @@ const dbDir = path.resolve(process.cwd(), '.teepee');
 const configPath = path.join(dbDir, 'config.yaml');
 const dbPath = path.join(dbDir, 'db.sqlite');
 const pidFile = path.join(dbDir, 'pid');
+const cliCacheDir = path.join(os.homedir(), '.teepee');
+const updateCachePath = path.join(cliCacheDir, 'update-check.json');
+const cliPackageJsonPath = path.resolve(__dirname, '..', 'package.json');
+const cliPackage = JSON.parse(fs.readFileSync(cliPackageJsonPath, 'utf-8')) as {
+  name: string;
+  version: string;
+};
+const cliVersion = cliPackage.version;
+const cliPackageName = cliPackage.name;
+const updateCacheTtlMs = 12 * 60 * 60 * 1000;
 
 function ensureDir() {
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+}
+
+function ensureCliCacheDir() {
+  if (!fs.existsSync(cliCacheDir)) fs.mkdirSync(cliCacheDir, { recursive: true });
+}
+
+function usageUpdateLine() {
+  return '  teepee update                   Check for updates';
 }
 
 function usage() {
@@ -45,8 +65,143 @@ Usage:
   teepee deny <email> tag <agents|*>
 
   teepee agents                   List configured agents
-  teepee update                   Check for updates
+  teepee version                  Show CLI version
+${usageUpdateLine()}
 `);
+}
+
+function compareVersions(a: string, b: string): number {
+  const parse = (value: string) =>
+    value
+      .split('-')[0]
+      .split('.')
+      .map((part) => Number.parseInt(part, 10) || 0);
+
+  const aParts = parse(a);
+  const bParts = parse(b);
+  const len = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (aParts[i] ?? 0) - (bParts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function readCachedLatestVersion(): string | null {
+  try {
+    if (!fs.existsSync(updateCachePath)) return null;
+    const raw = JSON.parse(fs.readFileSync(updateCachePath, 'utf-8')) as {
+      latest?: string;
+      checked_at?: number;
+      package_name?: string;
+    };
+    if (raw.package_name !== cliPackageName) return null;
+    if (!raw.latest || typeof raw.checked_at !== 'number') return null;
+    if (Date.now() - raw.checked_at > updateCacheTtlMs) return null;
+    return raw.latest;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedLatestVersion(latest: string) {
+  try {
+    ensureCliCacheDir();
+    fs.writeFileSync(
+      updateCachePath,
+      JSON.stringify(
+        {
+          package_name: cliPackageName,
+          latest,
+          checked_at: Date.now(),
+        },
+        null,
+        2
+      )
+    );
+  } catch {
+    // Best-effort cache only.
+  }
+}
+
+function fetchLatestVersionFromRegistry(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      `https://registry.npmjs.org/${cliPackageName}/latest`,
+      {
+        timeout: 5000,
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': `${cliPackageName}/${cliVersion}`,
+        },
+      },
+      (res) => {
+        if (!res.statusCode || res.statusCode >= 400) {
+          reject(new Error(`Registry request failed with status ${res.statusCode || 'unknown'}`));
+          res.resume();
+          return;
+        }
+
+        let body = '';
+        res.setEncoding('utf-8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body) as { version?: string };
+            if (!parsed.version) {
+              reject(new Error('Registry response did not include a version'));
+              return;
+            }
+            resolve(parsed.version);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error('Registry request timed out'));
+    });
+    req.on('error', reject);
+  });
+}
+
+async function getLatestVersion(forceRefresh = false): Promise<string> {
+  if (!forceRefresh) {
+    const cached = readCachedLatestVersion();
+    if (cached) return cached;
+  }
+
+  const latest = await fetchLatestVersionFromRegistry();
+  writeCachedLatestVersion(latest);
+  return latest;
+}
+
+async function showUpdateStatus(forceRefresh = false) {
+  console.log(`Teepee CLI ${cliVersion}`);
+
+  try {
+    const latest = await getLatestVersion(forceRefresh);
+    if (compareVersions(latest, cliVersion) > 0) {
+      console.log(`Latest version: ${latest}`);
+      console.log('Update available.');
+      console.log('');
+      console.log('Use one of these:');
+      console.log(`  npx ${cliPackageName}@latest start`);
+      console.log(`  npm install -g ${cliPackageName}@latest`);
+    } else {
+      console.log(`Latest version: ${latest}`);
+      console.log('You are up to date.');
+    }
+  } catch (error: any) {
+    console.log('Could not check the npm registry right now.');
+    console.log(`Current version: ${cliVersion}`);
+    console.log(`Manual update: npm install -g ${cliPackageName}@latest`);
+    if (error?.message) {
+      console.log(`Reason: ${error.message}`);
+    }
+  }
 }
 
 switch (command) {
@@ -239,8 +394,13 @@ agents:
     break;
   }
 
+  case 'version': {
+    console.log(cliVersion);
+    break;
+  }
+
   case 'update': {
-    console.log('Check for updates: npm install -g teepee-cli@latest');
+    void showUpdateStatus(true);
     break;
   }
 

@@ -562,6 +562,7 @@ export function App() {
             </button>
             <h2>Select a topic to start</h2>
             <p>Or create a new one with +</p>
+            <p>Type <code>/help</code> in any topic to see available commands.</p>
             {demoEnabled && authUser.role === 'owner' && (
               <p>
                 Demo mode is on. Press {demoHotkey} or click the Demo button to send the prompt sequence to

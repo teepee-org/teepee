@@ -133,10 +133,15 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
         value={text}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'Read-only' : 'Type a message... (@ to mention agents, Shift+Enter for new line)'}
+        placeholder={disabled ? 'Read-only' : 'Type a message... (/help for commands, @ to mention agents)'}
         disabled={disabled}
         rows={3}
       />
+      {!disabled && (
+        <div className="compose-hint">
+          Type <code>/help</code> for commands. Use <code>@</code> to mention agents.
+        </div>
+      )}
     </div>
   );
 }

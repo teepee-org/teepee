@@ -498,6 +498,21 @@ body {
   opacity: 0.5;
 }
 
+.compose-hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.compose-hint code,
+.empty-state code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 5px;
+}
+
 /* Autocomplete */
 .autocomplete-dropdown {
   position: absolute;
@@ -1123,6 +1138,10 @@ body {
     font-size: 16px;
     min-height: 48px;
     padding: 8px 12px;
+  }
+
+  .compose-hint {
+    font-size: 11px;
   }
 
   /* Autocomplete above compose */
