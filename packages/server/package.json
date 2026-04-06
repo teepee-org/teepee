@@ -15,7 +15,7 @@
   "homepage": "https://teepee.org",
   "repository": {
     "type": "git",
-    "url": "https://github.com/teepee-org/teepee.git"
+    "url": "https://github.com/typeeffect/teepee.git"
   },
   "publishConfig": {
     "access": "public"

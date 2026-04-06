@@ -240,4 +240,4 @@ MIT
 ## Links
 
 - Website: [teepee.org](https://teepee.org)
-- GitHub: [github.com/teepee-org/teepee](https://github.com/teepee-org/teepee)
+- GitHub: [github.com/typeeffect/teepee](https://github.com/typeeffect/teepee)
