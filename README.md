@@ -2,7 +2,7 @@
 
 **Coordinate AI agents with @mentions.**
 
-Teepee is a self-hosted workspace for real project work with AI agents. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
+Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Invite teammates, assign roles, and coordinate work with @mentions. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
 
 Agents can also hand off work to each other: one agent writes the task, tags the next, and execution continues automatically.
 
@@ -19,6 +19,7 @@ The npm package is `teepee-cli`. If you install it globally, it exposes the `tee
 Teepee is for the moment when "open a few terminals and coordinate agents by hand" stops scaling.
 
 - Keep humans and agents in the same topic-based workspace
+- Invite teammates with magic links and role-based permissions
 - Trigger agents with `@mentions` instead of bespoke scripts
 - Let agents delegate work to each other in public, auditable conversation
 - Mix providers like Claude, Codex, and local models in one project
@@ -72,6 +73,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 ## Good fits
 
 - Coordinating a small team of coding agents in one repo
+- Inviting human teammates into the same workspace instead of coordinating in a separate chat tool
 - Review + implementation + architecture loops in the same workspace
 - Self-hosted local workflows where you want auditability and control
 - Mixed-provider setups where different agents use different CLIs
@@ -81,6 +83,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **@mention driven** — Write `@coder` in chat. The agent activates. Quoted mentions like `"@agent"` are ignored.
 - **Multi-agent parallel** — Tag multiple agents in one message. They run simultaneously with isolated context.
 - **Agent chaining** — An agent's reply can mention another agent, triggering automatic follow-up. Configurable depth limits prevent loops.
+- **Human + agent collaboration** — Invite teammates with magic links, assign roles, and keep humans and agents in the same workspace.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
 - **Realtime streaming** — Agent output streams token-by-token via WebSocket.
 - **Self-hosted** — Runs on your machine. Your code, your API keys, your control.
@@ -165,6 +168,8 @@ Click **Admin** in the sidebar (owner only) to:
 - **Invite users** — Generate magic links with role and agent permissions
 - **Manage permissions** — Allow/deny specific agents per user
 - **Revoke access** — Instantly invalidate sessions and tokens
+
+This is a shared workspace, not a single-user agent console: multiple humans can join the same Teepee, collaborate in topics, and decide which users can tag which agents.
 
 ## Auth model
 
