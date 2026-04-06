@@ -58,6 +58,8 @@ agents:
 npx teepee-cli start
 ```
 
+Run this in the root of the project you want Teepee to work on. Teepee creates `.teepee/config.yaml` and keeps its state for that project there.
+
 Open the owner link printed in the terminal. Create a topic, start chatting.
 
 **3. Tag agents**

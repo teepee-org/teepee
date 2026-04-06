@@ -53,7 +53,7 @@ Package:
   teepee <command>               Once installed globally
 
 Usage:
-  teepee start [--port <port>]    Start server
+  teepee start [--port <port>]    Start server in the current project root
   teepee stop                     Stop server
   teepee status                   Show status
 
