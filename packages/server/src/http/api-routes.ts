@@ -9,6 +9,22 @@ import {
   createInviteToken,
   revokeUserFull,
   executeCommand,
+  createDivider,
+  listDividers,
+  renameDivider,
+  deleteDivider,
+  reorderDividers,
+  createSubject,
+  listSubjects,
+  renameSubject,
+  moveSubject,
+  deleteSubject,
+  reorderSubjects,
+  moveTopic,
+  reorderTopics,
+  listArchivedTopics,
+  restoreTopic,
+  archiveTopic,
 } from 'teepee-core';
 import type { SessionUser, CommandContext } from 'teepee-core';
 import type { ServerContext } from '../context.js';
@@ -194,5 +210,191 @@ export function handleApiRoute(
     return true;
   }
 
+  // ── Dividers ──
+
+  if (url.pathname === '/api/dividers' && req.method === 'GET') {
+    json(listDividers(ctx.db));
+    return true;
+  }
+
+  if (url.pathname === '/api/dividers' && req.method === 'POST') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { name, position } = JSON.parse(body);
+        const id = createDivider(ctx.db, name, position);
+        broadcastOrganization(ctx, { kind: 'divider.created', id });
+        json({ id, name, position: position ?? 0 }, 201);
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/dividers\/\d+$/) && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const id = parseInt(url.pathname.split('/')[3]);
+        const { name } = JSON.parse(body);
+        renameDivider(ctx.db, id, name);
+        broadcastOrganization(ctx, { kind: 'divider.updated', id });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/dividers\/\d+$/) && req.method === 'DELETE') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    const id = parseInt(url.pathname.split('/')[3]);
+    deleteDivider(ctx.db, id);
+    broadcastOrganization(ctx, { kind: 'divider.deleted', id });
+    json({ ok: true });
+    return true;
+  }
+
+  if (url.pathname === '/api/dividers/reorder' && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { orderedIds } = JSON.parse(body);
+        reorderDividers(ctx.db, orderedIds);
+        broadcastOrganization(ctx, { kind: 'divider.updated', id: 0 });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  // ── Subjects ──
+
+  if (url.pathname === '/api/subjects' && req.method === 'GET') {
+    json(listSubjects(ctx.db));
+    return true;
+  }
+
+  if (url.pathname === '/api/subjects' && req.method === 'POST') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { name, dividerId, parentId, position } = JSON.parse(body);
+        const id = createSubject(ctx.db, name, dividerId, parentId, position);
+        broadcastOrganization(ctx, { kind: 'subject.created', id });
+        json({ id, name }, 201);
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/subjects\/\d+$/) && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const id = parseInt(url.pathname.split('/')[3]);
+        const { name } = JSON.parse(body);
+        renameSubject(ctx.db, id, name);
+        broadcastOrganization(ctx, { kind: 'subject.updated', id });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/subjects\/\d+\/move$/) && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const id = parseInt(url.pathname.split('/')[3]);
+        const { dividerId, parentId } = JSON.parse(body);
+        moveSubject(ctx.db, id, dividerId, parentId);
+        broadcastOrganization(ctx, { kind: 'subject.updated', id });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/subjects\/\d+$/) && req.method === 'DELETE') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    const id = parseInt(url.pathname.split('/')[3]);
+    deleteSubject(ctx.db, id);
+    broadcastOrganization(ctx, { kind: 'subject.deleted', id });
+    json({ ok: true });
+    return true;
+  }
+
+  if (url.pathname === '/api/subjects/reorder' && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { parentId, orderedIds } = JSON.parse(body);
+        reorderSubjects(ctx.db, parentId ?? null, orderedIds);
+        broadcastOrganization(ctx, { kind: 'subject.updated', id: 0 });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  // ── Topic organization ──
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/move$/) && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const topicId = parseInt(url.pathname.split('/')[3]);
+        const { dividerId, subjectId } = JSON.parse(body);
+        moveTopic(ctx.db, topicId, dividerId, subjectId);
+        broadcastOrganization(ctx, { kind: 'topic.moved', topicId });
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/topics/reorder' && req.method === 'PUT') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify organization' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { orderedIds } = JSON.parse(body);
+        reorderTopics(ctx.db, orderedIds);
+        json({ ok: true });
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/topics/archived' && req.method === 'GET') {
+    json(listArchivedTopics(ctx.db));
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/archive$/) && req.method === 'POST') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    const topicId = parseInt(url.pathname.split('/')[3]);
+    archiveTopic(ctx.db, topicId);
+    json({ ok: true });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/restore$/) && req.method === 'POST') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    const topicId = parseInt(url.pathname.split('/')[3]);
+    restoreTopic(ctx.db, topicId);
+    broadcastOrganization(ctx, { kind: 'topic.restored', topicId });
+    json({ ok: true });
+    return true;
+  }
+
   return false;
+}
+
+/** Broadcast organization change to all connected clients */
+function broadcastOrganization(ctx: ServerContext, change: object) {
+  const data = JSON.stringify({ type: 'organization.changed', change });
+  for (const client of ctx.clients) {
+    if (client.ws.readyState === 1) { // WebSocket.OPEN
+      client.ws.send(data);
+    }
+  }
 }

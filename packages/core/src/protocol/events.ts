@@ -55,6 +55,15 @@ export interface ErrorEvent {
   message: string;
 }
 
+export interface OrganizationEvent {
+  type: 'organization.changed';
+  change:
+    | { kind: 'divider.created' | 'divider.updated' | 'divider.deleted'; id: number }
+    | { kind: 'subject.created' | 'subject.updated' | 'subject.deleted'; id: number }
+    | { kind: 'topic.moved'; topicId: number }
+    | { kind: 'topic.restored'; topicId: number };
+}
+
 export type ServerEvent =
   | TopicHistoryEvent
   | MessageCreatedEvent
@@ -63,7 +72,8 @@ export type ServerEvent =
   | AgentJobCompletedEvent
   | AgentJobFailedEvent
   | SystemEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | OrganizationEvent;
 
 // ── Client → Server events ──
 

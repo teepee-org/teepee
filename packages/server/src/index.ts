@@ -9,6 +9,7 @@ import {
   getMessages,
   Orchestrator,
   ensureOwner,
+  runMigrations,
 } from 'teepee-core';
 import type { OrchestratorCallbacks } from 'teepee-core';
 import type { ServerContext, ClientState } from './context.js';
@@ -34,6 +35,7 @@ export function startServer(
   }
 
   const db = openDb(dbPath);
+  runMigrations(db);
   const ownerEmail = process.env.TEEPEE_OWNER_EMAIL || 'owner@localhost';
   ensureOwner(db, ownerEmail);
   const ownerSecret = crypto.randomBytes(16).toString('hex');

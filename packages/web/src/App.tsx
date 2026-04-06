@@ -1,12 +1,24 @@
 import { useState, useCallback, useEffect } from 'react';
-import { TopicList } from './components/TopicList';
+import { TopicTree } from './components/TopicTree';
+import { ActivityBar } from './components/ActivityBar';
+import type { ActivityView } from './components/ActivityBar';
+import { ArchiveList } from './components/ArchiveList';
 import { ChatView } from './components/ChatView';
 import { InvitePage } from './components/InvitePage';
 import { AdminPage } from './components/AdminPage';
+import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
-import { fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage } from './api';
+import {
+  fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage,
+  fetchDividers, fetchSubjects, fetchArchivedTopics,
+  apiCreateDivider, apiRenameDivider, apiDeleteDivider,
+  apiCreateSubject, apiRenameSubject, apiDeleteSubject,
+  apiMoveTopic, apiArchiveTopic, apiRestoreTopic,
+  apiReorderDividers, apiReorderSubjects,
+} from './api';
 import type { ProjectInfo } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
+import type { DividerResponse, SubjectResponse } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface ActiveJob {
@@ -51,11 +63,25 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
+  const [jobsByTopic, setJobsByTopic] = useState<Record<number, ActiveJob[]>>({});
   const [showAdmin, setShowAdmin] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [demoRun, setDemoRun] = useState<DemoRunState | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
+  const [dividers, setDividers] = useState<DividerResponse[]>([]);
+  const [subjects, setSubjects] = useState<SubjectResponse[]>([]);
+  const [archivedTopics, setArchivedTopics] = useState<Topic[]>([]);
+  const [activeView, setActiveView] = useState<ActivityView>(() => {
+    return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
+  });
+
+  const { width: sidebarWidth, collapsed: sidebarCollapsed, resizing, handleProps, toggleCollapsed } = useResizable({
+    initialWidth: 260,
+    minWidth: 180,
+    maxWidthPercent: 50,
+    storageKey: 'teepee-sidebar-width',
+    collapsedKey: 'teepee-sidebar-collapsed',
+  });
 
   // Check if on invite page
   const inviteToken = window.location.pathname.match(/^\/invite\/([a-f0-9]+)$/)?.[1];
@@ -82,11 +108,19 @@ export function App() {
     if (!authUser) return;
     fetchTopics().then(setTopics);
     fetchAgents().then(setAgents);
+    fetchDividers().then(setDividers);
+    fetchSubjects().then(setSubjects);
+    fetchArchivedTopics().then(setArchivedTopics);
     fetchProject().then((p) => {
       setProject(p);
       document.title = `${p.name} — Teepee`;
     });
   }, [authUser]);
+
+  // Persist active view
+  useEffect(() => {
+    localStorage.setItem('teepee-active-view', activeView);
+  }, [activeView]);
 
   const demoEnabled = DEMO_MODE_FROM_URL || Boolean(project?.demo?.enabled);
   const demoTopicName =
@@ -103,6 +137,20 @@ export function App() {
       : 0) ||
     project?.demo?.delay_ms ||
     1200;
+
+  // Derive active jobs for the current topic from the per-topic map
+  const activeJobs = activeTopicId ? (jobsByTopic[activeTopicId] || []) : [];
+
+  // Helper to update jobs for a specific topic
+  const updateTopicJobs = useCallback(
+    (topicId: number, updater: (prev: ActiveJob[]) => ActiveJob[]) => {
+      setJobsByTopic((prev) => ({
+        ...prev,
+        [topicId]: updater(prev[topicId] || []),
+      }));
+    },
+    []
+  );
 
   // WebSocket event handler
   const onEvent = useCallback(
@@ -125,62 +173,60 @@ export function App() {
           break;
 
         case 'agent.job.started':
-          if (event.topicId === activeTopicId) {
-            setActiveJobs((prev) => [
-              ...prev,
-              {
-                jobId: event.jobId,
-                agentName: event.agentName,
-                status: 'running',
-                streamContent: '',
-              },
-            ]);
-          }
+          updateTopicJobs(event.topicId, (prev) => [
+            ...prev,
+            {
+              jobId: event.jobId,
+              agentName: event.agentName,
+              status: 'running',
+              streamContent: '',
+            },
+          ]);
           break;
 
         case 'message.stream':
-          if (event.topicId === activeTopicId) {
-            setActiveJobs((prev) =>
-              prev.map((j) =>
-                j.jobId === event.jobId
-                  ? {
-                      ...j,
-                      status: 'streaming',
-                      streamContent: j.streamContent + event.chunk,
-                    }
-                  : j
-              )
-            );
-          }
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.map((j) =>
+              j.jobId === event.jobId
+                ? {
+                    ...j,
+                    status: 'streaming',
+                    streamContent: j.streamContent + event.chunk,
+                  }
+                : j
+            )
+          );
           break;
 
         case 'agent.job.completed':
-          if (event.topicId === activeTopicId) {
-            // Remove from active jobs, add message
-            setActiveJobs((prev) =>
-              prev.map((j) =>
-                j.jobId === event.jobId ? { ...j, status: 'done' } : j
-              )
-            );
-            if (event.message) {
+          // Mark job as done
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.map((j) =>
+              j.jobId === event.jobId ? { ...j, status: 'done' } : j
+            )
+          );
+          if (event.message) {
+            if (event.topicId === activeTopicId) {
               setMessages((prev) => {
                 if (prev.some((m) => m.id === event.message.id)) return prev;
                 return [...prev, event.message];
               });
             }
-            // Clean up done jobs after animation
-            setTimeout(() => {
-              setActiveJobs((prev) =>
-                prev.filter((j) => j.jobId !== event.jobId)
-              );
-            }, 500);
           }
+          // Clean up done jobs after animation
+          setTimeout(() => {
+            updateTopicJobs(event.topicId, (prev) =>
+              prev.filter((j) => j.jobId !== event.jobId)
+            );
+          }, 500);
           break;
 
         case 'agent.job.failed':
+          // Remove slot
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.filter((j) => j.jobId !== event.jobId)
+          );
           if (event.topicId === activeTopicId) {
-            // Remove slot and add error as message in timeline
-            setActiveJobs((prev) => prev.filter((j) => j.jobId !== event.jobId));
             setMessages((prev) => [
               ...prev,
               {
@@ -210,27 +256,56 @@ export function App() {
             ]);
           }
           break;
+
+        case 'organization.changed': {
+          // Reload organization data on any change
+          const kind = event.change.kind;
+          if (kind.startsWith('divider.')) {
+            fetchDividers().then(setDividers);
+          }
+          if (kind.startsWith('subject.')) {
+            fetchSubjects().then(setSubjects);
+          }
+          if (kind === 'topic.moved' || kind === 'topic.restored') {
+            fetchTopics().then(setTopics);
+            fetchArchivedTopics().then(setArchivedTopics);
+          }
+          break;
+        }
       }
     },
-    [activeTopicId]
+    [activeTopicId, updateTopicJobs]
   );
 
   const { send, connected } = useWebSocket(onEvent);
 
+  // Unsubscribe from topics that have no active jobs and aren't the current topic
+  useEffect(() => {
+    for (const key of Object.keys(jobsByTopic)) {
+      const topicId = Number(key);
+      if (topicId !== activeTopicId && jobsByTopic[topicId].length === 0) {
+        send({ type: 'topic.leave', topicId });
+        setJobsByTopic((prev) => {
+          const next = { ...prev };
+          delete next[topicId];
+          return next;
+        });
+      }
+    }
+  }, [jobsByTopic, activeTopicId, send]);
+
   // Join topic via WebSocket
+  // We intentionally do NOT send topic.leave so the server keeps delivering
+  // streaming events for topics with in-flight agent jobs. The per-topic
+  // jobsByTopic map preserves job state across switches.
   const handleSelectTopic = useCallback(
     (topicId: number) => {
-      // Leave previous topic
-      if (activeTopicId) {
-        send({ type: 'topic.leave', topicId: activeTopicId });
-      }
       setActiveTopicId(topicId);
       setMessages([]);
-      setActiveJobs([]);
       setSidebarOpen(false);
       send({ type: 'topic.join', topicId });
     },
-    [activeTopicId, send]
+    [send]
   );
 
   const handleCreateTopic = useCallback(async () => {
@@ -240,6 +315,78 @@ export function App() {
     setTopics((prev) => [...prev, { ...topic, language: null, archived: 0 }]);
     handleSelectTopic(topic.id);
   }, [handleSelectTopic]);
+
+  // Organization handlers
+  const handleCreateDivider = useCallback(async (name: string) => {
+    const d = await apiCreateDivider(name);
+    setDividers((prev) => [...prev, d]);
+  }, []);
+
+  const handleRenameDivider = useCallback(async (id: number, name: string) => {
+    await apiRenameDivider(id, name);
+    setDividers((prev) => prev.map((d) => d.id === id ? { ...d, name } : d));
+  }, []);
+
+  const handleDeleteDivider = useCallback(async (id: number) => {
+    await apiDeleteDivider(id);
+    setDividers((prev) => prev.filter((d) => d.id !== id));
+    fetchTopics().then(setTopics);
+  }, []);
+
+  const handleCreateSubject = useCallback(async (name: string, dividerId?: number | null, parentId?: number | null) => {
+    const s = await apiCreateSubject(name, dividerId, parentId);
+    setSubjects((prev) => [...prev, s]);
+  }, []);
+
+  const handleRenameSubject = useCallback(async (id: number, name: string) => {
+    await apiRenameSubject(id, name);
+    setSubjects((prev) => prev.map((s) => s.id === id ? { ...s, name } : s));
+  }, []);
+
+  const handleDeleteSubject = useCallback(async (id: number) => {
+    await apiDeleteSubject(id);
+    setSubjects((prev) => prev.filter((s) => s.id !== id));
+    fetchTopics().then(setTopics);
+  }, []);
+
+  const handleReorderDividers = useCallback(async (orderedIds: number[]) => {
+    await apiReorderDividers(orderedIds);
+    fetchDividers().then(setDividers);
+  }, []);
+
+  const handleReorderSubjects = useCallback(async (parentId: number | null, orderedIds: number[]) => {
+    await apiReorderSubjects(parentId, orderedIds);
+    fetchSubjects().then(setSubjects);
+  }, []);
+
+  const handleMoveTopic = useCallback(async (topicId: number, dividerId?: number | null, subjectId?: number | null) => {
+    await apiMoveTopic(topicId, dividerId, subjectId);
+    fetchTopics().then(setTopics);
+  }, []);
+
+  const handleArchiveTopic = useCallback(async (topicId: number) => {
+    await apiArchiveTopic(topicId);
+    setTopics((prev) => prev.filter((t) => t.id !== topicId));
+    fetchArchivedTopics().then(setArchivedTopics);
+    if (activeTopicId === topicId) {
+      setActiveTopicId(null);
+      setMessages([]);
+    }
+  }, [activeTopicId]);
+
+  const handleRestoreTopic = useCallback(async (topicId: number) => {
+    await apiRestoreTopic(topicId);
+    fetchTopics().then(setTopics);
+    fetchArchivedTopics().then(setArchivedTopics);
+  }, []);
+
+  const handleChangeView = useCallback((view: ActivityView) => {
+    setActiveView(view);
+    if (view === 'settings' && authUser?.role === 'owner') {
+      setSidebarOpen(false);
+      setShowAdmin(true);
+    }
+  }, [authUser]);
 
   const sleep = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
 
@@ -333,6 +480,19 @@ export function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [authUser, demoEnabled, demoHotkey, startDemoAutoplay]);
+
+  // Ctrl+Shift+E: focus topics view
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'E') {
+        e.preventDefault();
+        setActiveView('topics');
+        if (sidebarCollapsed) toggleCollapsed();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [sidebarCollapsed, toggleCollapsed]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -485,10 +645,59 @@ export function App() {
     );
   }
 
+  const activeTopics = topics.filter((t) => !t.archived);
+
+  // Render side panel content based on active view
+  const renderSidePanel = () => {
+    if (activeView === 'archive') {
+      return (
+        <ArchiveList
+          archivedTopics={archivedTopics}
+          dividers={dividers}
+          subjects={subjects}
+          onRestore={handleRestoreTopic}
+          userRole={authUser.role}
+        />
+      );
+    }
+    // Default: topics view
+    return (
+      <TopicTree
+        topics={activeTopics}
+        dividers={dividers}
+        subjects={subjects}
+        activeTopicId={activeTopicId}
+        onSelectTopic={handleSelectTopic}
+        onCreateTopic={handleCreateTopic}
+        onCreateDivider={handleCreateDivider}
+        onRenameDivider={handleRenameDivider}
+        onDeleteDivider={handleDeleteDivider}
+        onCreateSubject={handleCreateSubject}
+        onRenameSubject={handleRenameSubject}
+        onDeleteSubject={handleDeleteSubject}
+        onMoveTopic={handleMoveTopic}
+        onArchiveTopic={handleArchiveTopic}
+        onReorderDividers={handleReorderDividers}
+        onReorderSubjects={handleReorderSubjects}
+        userRole={authUser.role}
+      />
+    );
+  };
+
   return (
     <div className="app">
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+      <ActivityBar
+        activeView={activeView}
+        onChangeView={handleChangeView}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleCollapsed}
+        archiveCount={archivedTopics.length}
+      />
+      <aside
+        className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''} ${resizing ? 'resizing' : ''}`}
+        style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+      >
         <div className="sidebar-header">
           <span className={`connection-dot ${connected ? 'connected' : ''}`} />
           <div className="project-info">
@@ -500,19 +709,43 @@ export function App() {
               </span>
             )}
           </div>
+          {/* Mobile-only view switcher icons */}
+          <div className="drawer-header-actions">
+            <button
+              className={`drawer-view-btn ${activeView === 'archive' ? 'active' : ''}`}
+              onClick={() => setActiveView(activeView === 'archive' ? 'topics' : 'archive')}
+              aria-label="Archive"
+              title="Archive"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="16" height="4" rx="1" />
+                <path d="M3 7v8a2 2 0 002 2h10a2 2 0 002-2V7" />
+                <path d="M8 11h4" />
+              </svg>
+              {archivedTopics.length > 0 && <span className="drawer-badge">{archivedTopics.length}</span>}
+            </button>
+            {authUser.role === 'owner' && (
+              <button
+                className="drawer-view-btn"
+                onClick={() => { setSidebarOpen(false); setShowAdmin(true); }}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="10" cy="10" r="3" />
+                  <path d="M10 1.5v2M10 16.5v2M3.05 5l1.73 1M15.22 14l1.73 1M1.5 10h2M16.5 10h2M3.05 15l1.73-1M15.22 6l1.73-1" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
-        <TopicList
-          topics={topics}
-          activeTopicId={activeTopicId}
-          onSelectTopic={handleSelectTopic}
-          onCreateTopic={handleCreateTopic}
-        />
+        {renderSidePanel()}
         <div className="agents-section">
           <h3>Agents</h3>
           <ul className="agents-list">
             {agents.map((a) => (
               <li key={a.name}>
-                🤖 {a.name} <span className="provider-badge">{a.provider}</span>
+                {a.name} <span className="provider-badge">{a.provider}</span>
               </li>
             ))}
           </ul>
@@ -538,6 +771,8 @@ export function App() {
             </button>
           )}
         </div>
+        {/* Resize handle (desktop only) */}
+        <div className={`sidebar-resize-handle ${resizing ? 'dragging' : ''}`} {...handleProps} />
       </aside>
       <main className="main">
         {activeTopic ? (
