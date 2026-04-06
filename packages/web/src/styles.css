@@ -909,6 +909,21 @@ body {
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.tos-warning {
+  background: color-mix(in srgb, var(--warning, #e8a735) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e8a735) 40%, transparent);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+}
+
+.tos-warning strong {
+  color: var(--warning, #e8a735);
+}
+
 .form-error {
   color: var(--error);
   font-size: 13px;

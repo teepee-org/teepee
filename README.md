@@ -198,6 +198,8 @@ Click **Admin** in the sidebar (owner only) to:
 
 This is a shared workspace, not a single-user agent console: multiple humans can join the same Teepee, collaborate in topics, and decide which users can tag which agents.
 
+> **Shared-use responsibility:** If you invite collaborators to use agents backed by third-party paid services (e.g. Claude, Codex), you are responsible for verifying that those services' Terms of Service allow shared or team use. Teepee does not grant additional usage rights for those services.
+
 ## Auth model
 
 - **Owner**: Authenticated via a one-time secret link printed to the terminal at startup. The secret changes on every restart. Works from any device.
@@ -210,6 +212,7 @@ This is a shared workspace, not a single-user agent console: multiple humans can
 
 ## Security notes
 
+- **Third-party service terms**: When sharing agent access with invited users, ensure the underlying services' Terms of Service permit multi-user or team usage under your account.
 - No passwords. Auth is session-based (cookie) with magic links.
 - On localhost without HTTPS, the session cookie is not marked `Secure` — this is fine for local development.
 - For production/public access, **always use HTTPS** via a reverse proxy. Teepee sets the `Secure` cookie flag when it detects `X-Forwarded-Proto: https`.

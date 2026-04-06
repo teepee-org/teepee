@@ -232,6 +232,10 @@ export function AdminPage({ agents, onBack }: Props) {
             <h2>Invite user</h2>
             <p className="admin-desc">Generate a magic link to invite someone to this Teepee.</p>
 
+            <div className="tos-warning">
+              <strong>⚠ Shared-use notice:</strong> If invited users will access agents backed by paid third-party services, verify that those services' Terms of Service allow shared or team use. Teepee does not grant additional usage rights.
+            </div>
+
             <div className="form-group">
               <label>Email address</label>
               <input
