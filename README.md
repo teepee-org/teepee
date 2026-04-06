@@ -117,10 +117,11 @@ If the provider supports editing and shell actions, agents can modify files in t
 alice> @architect design an auth module
   → architect responds with spec
 
-alice> @coder implement it
-  → coder writes the code
+alice> @architect write a task for @coder to implement it
+  → architect drafts the implementation task and tags @coder
+  → coder starts automatically
 
-alice> @coder @reviewer what do you think?
+bob> @coder @reviewer what do you think?
   → coder and reviewer respond in parallel
 
 reviewer> Found a bug. @coder please fix the null check
