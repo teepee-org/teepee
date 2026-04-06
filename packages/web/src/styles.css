@@ -266,6 +266,12 @@ body {
   background: var(--bg-secondary);
   border-radius: 8px;
   padding: 12px 16px;
+  color: var(--text-primary);
+}
+
+.message.system-rich .message-body {
+  color: var(--text-primary);
+  background: transparent;
 }
 
 .message.system-rich h1,

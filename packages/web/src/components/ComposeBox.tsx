@@ -1,15 +1,19 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Agent } from '../types';
+import type { CommandDef } from '../buildHelpMarkdown';
+
+type AutocompleteMode = 'agent' | 'command' | null;
 
 interface Props {
   agents: Agent[];
+  commands: CommandDef[];
   onSend: (text: string) => void;
   disabled?: boolean;
 }
 
-export function ComposeBox({ agents, onSend, disabled }: Props) {
+export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
   const [text, setText] = useState('');
-  const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [acMode, setAcMode] = useState<AutocompleteMode>(null);
   const [autocompleteFilter, setAutocompleteFilter] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -18,12 +22,18 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
     a.name.toLowerCase().startsWith(autocompleteFilter.toLowerCase())
   );
 
+  const filteredCommands = commands.filter((c) =>
+    c.command.toLowerCase().startsWith('/' + autocompleteFilter.toLowerCase())
+  );
+
+  const acItems = acMode === 'agent' ? filteredAgents.length : acMode === 'command' ? filteredCommands.length : 0;
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (showAutocomplete) {
+      if (acMode) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          setSelectedIdx((i) => Math.min(i + 1, filteredAgents.length - 1));
+          setSelectedIdx((i) => Math.min(i + 1, acItems - 1));
           return;
         }
         if (e.key === 'ArrowUp') {
@@ -31,15 +41,26 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
           setSelectedIdx((i) => Math.max(i - 1, 0));
           return;
         }
-        if (e.key === 'Enter' || e.key === 'Tab') {
+        if (e.key === 'Tab') {
           e.preventDefault();
-          if (filteredAgents[selectedIdx]) {
+          if (acMode === 'agent' && filteredAgents[selectedIdx]) {
             insertMention(filteredAgents[selectedIdx].name);
+          } else if (acMode === 'command' && filteredCommands[selectedIdx]) {
+            insertCommand(filteredCommands[selectedIdx].command);
           }
           return;
         }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          if (acMode === 'agent' && filteredAgents[selectedIdx]) {
+            e.preventDefault();
+            insertMention(filteredAgents[selectedIdx].name);
+            return;
+          }
+          // For commands, Enter sends the text (don't intercept)
+          setAcMode(null);
+        }
         if (e.key === 'Escape') {
-          setShowAutocomplete(false);
+          setAcMode(null);
           return;
         }
       }
@@ -52,7 +73,7 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
         }
       }
     },
-    [showAutocomplete, filteredAgents, selectedIdx, text, disabled, onSend]
+    [acMode, acItems, filteredAgents, filteredCommands, selectedIdx, text, disabled, onSend]
   );
 
   const insertMention = (name: string) => {
@@ -63,13 +84,11 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
     const before = text.slice(0, pos);
     const after = text.slice(pos);
 
-    // Find the @ that triggered autocomplete
     const atIdx = before.lastIndexOf('@');
     const newText = before.slice(0, atIdx) + '@' + name + ' ' + after;
     setText(newText);
-    setShowAutocomplete(false);
+    setAcMode(null);
 
-    // Move cursor after mention
     setTimeout(() => {
       const newPos = atIdx + name.length + 2;
       textarea.setSelectionRange(newPos, newPos);
@@ -77,18 +96,43 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
     }, 0);
   };
 
+  const insertCommand = (command: string) => {
+    // Extract base command (e.g. "/join" from "/join <id>")
+    const base = command.split(' ')[0];
+    const hasArgs = command.includes('<');
+    const newText = hasArgs ? base + ' ' : base;
+    setText(newText);
+    setAcMode(null);
+
+    setTimeout(() => {
+      const textarea = inputRef.current;
+      if (textarea) {
+        textarea.setSelectionRange(newText.length, newText.length);
+        textarea.focus();
+      }
+    }, 0);
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setText(value);
 
-    // Check for @ autocomplete trigger
     const pos = e.target.selectionStart;
     const before = value.slice(0, pos);
-    const atIdx = before.lastIndexOf('@');
 
+    // Check for / command autocomplete (only at the very start)
+    if (before.startsWith('/') && !before.includes(' ')) {
+      const partial = before.slice(1);
+      setAutocompleteFilter(partial);
+      setSelectedIdx(0);
+      setAcMode('command');
+      return;
+    }
+
+    // Check for @ autocomplete trigger
+    const atIdx = before.lastIndexOf('@');
     if (atIdx !== -1) {
       const partial = before.slice(atIdx + 1);
-      // Only trigger if @ is at start or after a space
       const charBefore = atIdx > 0 ? before[atIdx - 1] : ' ';
       if (
         (charBefore === ' ' || charBefore === '\n' || atIdx === 0) &&
@@ -96,11 +140,11 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
       ) {
         setAutocompleteFilter(partial);
         setSelectedIdx(0);
-        setShowAutocomplete(true);
+        setAcMode('agent');
         return;
       }
     }
-    setShowAutocomplete(false);
+    setAcMode(null);
   };
 
   // Auto-resize textarea
@@ -114,7 +158,7 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
 
   return (
     <div className="compose-box">
-      {showAutocomplete && filteredAgents.length > 0 && (
+      {acMode === 'agent' && filteredAgents.length > 0 && (
         <div className="autocomplete-dropdown">
           {filteredAgents.map((agent, i) => (
             <div
@@ -124,6 +168,20 @@ export function ComposeBox({ agents, onSend, disabled }: Props) {
             >
               🤖 @{agent.name}
               <span className="autocomplete-provider">{agent.provider}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {acMode === 'command' && filteredCommands.length > 0 && (
+        <div className="autocomplete-dropdown">
+          {filteredCommands.map((cmd, i) => (
+            <div
+              key={cmd.command}
+              className={`autocomplete-item ${i === selectedIdx ? 'selected' : ''}`}
+              onClick={() => insertCommand(cmd.command)}
+            >
+              <code>{cmd.command}</code>
+              <span className="autocomplete-provider">{cmd.description}</span>
             </div>
           ))}
         </div>

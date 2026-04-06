@@ -3,6 +3,7 @@ import { MessageBubble } from './MessageBubble';
 import { AgentSlot } from './AgentSlot';
 import { ComposeBox } from './ComposeBox';
 import type { Message, Agent } from '../types';
+import type { CommandDef } from '../buildHelpMarkdown';
 
 interface ActiveJob {
   jobId: number;
@@ -17,12 +18,13 @@ interface Props {
   topicName: string;
   messages: Message[];
   agents: Agent[];
+  commands: CommandDef[];
   activeJobs: ActiveJob[];
   onSend: (text: string) => void;
   onMenuToggle?: () => void;
 }
 
-export function ChatView({ topicId, topicName, messages, agents, activeJobs, onSend, onMenuToggle }: Props) {
+export function ChatView({ topicId, topicName, messages, agents, commands, activeJobs, onSend, onMenuToggle }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
@@ -75,7 +77,7 @@ export function ChatView({ topicId, topicName, messages, agents, activeJobs, onS
         ))}
         <div ref={messagesEndRef} />
       </div>
-      <ComposeBox agents={agents} onSend={onSend} />
+      <ComposeBox agents={agents} commands={commands} onSend={onSend} />
     </div>
   );
 }

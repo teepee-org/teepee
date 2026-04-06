@@ -1,6 +1,6 @@
 {
   "name": "teepee-server",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "HTTP and WebSocket server for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

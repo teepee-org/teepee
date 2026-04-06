@@ -7,7 +7,7 @@ import { useWebSocket } from './useWebSocket';
 import { fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage } from './api';
 import type { ProjectInfo } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
-import { buildHelpMarkdown } from './buildHelpMarkdown';
+import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface ActiveJob {
   jobId: number;
@@ -336,6 +336,36 @@ export function App() {
 
   const handleSend = useCallback(
     (text: string) => {
+      // Helper: echo the typed command as a user message
+      const echoCommand = (cmdText: string) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now() - 1,
+            topic_id: activeTopicId ?? 0,
+            author_type: 'human' as const,
+            author_name: authUser?.handle ?? 'you',
+            body: cmdText,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      };
+
+      // Helper: append a system message
+      const systemReply = (body: string) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now(),
+            topic_id: activeTopicId ?? 0,
+            author_type: 'system' as const,
+            author_name: 'teepee',
+            body,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      };
+
       // Handle / commands
       if (text.startsWith('/')) {
         const parts = text.slice(1).trim().split(/\s+/);
@@ -343,45 +373,31 @@ export function App() {
 
         switch (cmd) {
           case 'help':
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: Date.now(),
-                topic_id: activeTopicId ?? 0,
-                author_type: 'system' as const,
-                author_name: 'teepee',
-                body: buildHelpMarkdown(),
-                created_at: new Date().toISOString(),
-              },
-            ]);
+            echoCommand(text);
+            systemReply(buildHelpMarkdown());
             return;
 
           case 'topics':
+            echoCommand(text);
             fetchTopics().then((t) => {
               setTopics(t);
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: Date.now(),
-                  topic_id: activeTopicId ?? 0,
-                  author_type: 'system' as const,
-                  author_name: 'teepee',
-                  body: t.length === 0
-                    ? 'No topics.'
-                    : t.map((tp) => `**#${tp.id}** ${tp.name}`).join('\n'),
-                  created_at: new Date().toISOString(),
-                },
-              ]);
+              systemReply(
+                t.length === 0
+                  ? 'No topics.'
+                  : t.map((tp) => `**#${tp.id}** ${tp.name}`).join('\n')
+              );
             });
             return;
 
           case 'join': {
+            echoCommand(text);
             const id = parseInt(parts[1]);
             if (!isNaN(id)) handleSelectTopic(id);
             return;
           }
 
           case 'new': {
+            echoCommand(text);
             const name = parts.slice(1).join(' ');
             if (name) {
               createTopic(name).then((topic) => {
@@ -393,20 +409,12 @@ export function App() {
           }
 
           case 'agents':
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: Date.now(),
-                topic_id: activeTopicId ?? 0,
-                author_type: 'system' as const,
-                author_name: 'teepee',
-                body: agents.map((a) => `**@${a.name}** (${a.provider})`).join('\n'),
-                created_at: new Date().toISOString(),
-              },
-            ]);
+            echoCommand(text);
+            systemReply(agents.map((a) => `**@${a.name}** (${a.provider})`).join('\n'));
             return;
 
           case 'topic': {
+            echoCommand(text);
             const sub = parts[1]?.toLowerCase();
             if (!activeTopicId) return;
             if (sub === 'language' && parts[2]) {
@@ -420,6 +428,7 @@ export function App() {
           }
 
           case 'alias': {
+            echoCommand(text);
             if (!activeTopicId || parts.length < 3) return;
             const agent = parts[1].replace('@', '');
             const alias = parts[2].replace('@', '');
@@ -433,7 +442,7 @@ export function App() {
       if (!activeTopicId) return;
       send({ type: 'message.send', topicId: activeTopicId, body: text });
     },
-    [activeTopicId, send, agents, handleSelectTopic]
+    [activeTopicId, send, agents, handleSelectTopic, authUser]
   );
 
   const activeTopic = topics.find((t) => t.id === activeTopicId);
@@ -538,6 +547,7 @@ export function App() {
             messages={messages}
             onMenuToggle={() => setSidebarOpen(true)}
             agents={agents}
+            commands={COMMANDS}
             activeJobs={activeJobs}
             onSend={handleSend}
           />
