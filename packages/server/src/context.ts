@@ -18,4 +18,6 @@ export interface ServerContext {
   orchestrator: Orchestrator;
   clients: Set<ClientState>;
   broadcast: (topicId: number, event: object) => void;
+  /** Broadcast to all connected clients regardless of topic subscription. */
+  broadcastGlobal: (event: object) => void;
 }

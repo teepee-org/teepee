@@ -6,7 +6,7 @@
 
 **Coordinate AI agents with @mentions.**
 
-Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Invite teammates, assign roles, and coordinate work with @mentions. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
+Teepee is a self-hosted workspace where humans and AI agents collaborate in topics. Invite teammates, assign roles, structure work with lightweight nested topics, and coordinate with @mentions. Mention an agent, it runs. Mention two, they run in parallel. An agent can mention another and continue the workflow automatically.
 
 This is not just chat. Teepee sits on top of a real project, so coding agents can work on the codebase underneath while humans stay in the same shared context.
 
@@ -31,6 +31,7 @@ The npm package is `teepee-cli`. If you install it globally, it exposes the `tee
 Teepee is for the moment when "open a few terminals and coordinate agents by hand" stops scaling.
 
 - Keep humans and agents in the same topic-based workspace
+- Organize work with lightweight nested topics instead of heavyweight project boards
 - Invite teammates with magic links and role-based permissions
 - Trigger agents with `@mentions` instead of bespoke scripts
 - Let agents delegate work to each other in public, auditable conversation
@@ -110,6 +111,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Multi-agent parallel** — Tag multiple agents in one message. They run simultaneously with isolated context.
 - **Agent chaining** — An agent's reply can mention another agent, triggering automatic follow-up. Configurable depth limits prevent loops.
 - **Human + agent collaboration** — Invite teammates with magic links, assign roles, and keep humans and agents in the same workspace.
+- **Hierarchical topics** — Topics can contain child topics, rendered with slight indentation and moved with simple slash commands.
 - **Works on the real project** — Agents run in the project working directory, so they can read files, make changes, and keep the workflow attached to the codebase itself.
 - **Specialized roles** — Split work across `@coder`, `@reviewer`, `@architect`, `@devops`, or your own custom agents with per-agent prompts.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
@@ -188,6 +190,10 @@ limits:
 /topic language <lang>    — set topic language
 /topic rename <name>      — rename topic
 /topic archive            — archive topic
+/topic move root          — move current topic to root level
+/topic move into <id>     — move current topic inside another topic
+/topic move before <id>   — move current topic before another topic
+/topic move after <id>    — move current topic after another topic
 /alias @agent @short      — create alias
 /agents                   — list agents
 ```

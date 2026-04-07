@@ -30,6 +30,24 @@ export function TopicTree({
 
   const navItems = useMemo(() => topics.map((t) => t.id), [topics]);
 
+  // Compute depth for each topic based on parent_topic_id chain
+  const depthMap = useMemo(() => {
+    const map = new Map<number, number>();
+    const idIndex = new Map(topics.map((t) => [t.id, t]));
+    for (const t of topics) {
+      let depth = 0;
+      let cur = t;
+      while (cur.parent_topic_id != null) {
+        depth++;
+        const parent = idIndex.get(cur.parent_topic_id);
+        if (!parent) break;
+        cur = parent;
+      }
+      map.set(t.id, depth);
+    }
+    return map;
+  }, [topics]);
+
   // Arrow key navigation
   useEffect(() => {
     const el = treeRef.current;
@@ -109,6 +127,7 @@ export function TopicTree({
                 key={topic.id}
                 className={`${topic.id === activeTopicId ? 'active' : ''} ${focusIndex === i ? 'keyboard-focus' : ''}`}
                 data-nav-index={i}
+                style={{ paddingLeft: `${16 + (depthMap.get(topic.id) || 0) * 12}px` }}
                 onClick={() => onSelectTopic(topic.id)}
                 onContextMenu={canEdit ? (e) => showContext(e, menuItems) : undefined}
                 onTouchStart={canEdit ? startLongPress(menuItems) : undefined}

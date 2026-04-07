@@ -3,7 +3,7 @@ export { openDb } from './database.js';
 export { SCHEMA } from './schema.js';
 export { createUser, activateUser, getUser, getUserByHandle, listUsers, revokeUser } from './users.js';
 export type { UserRow } from './users.js';
-export { createTopic, getTopic, listTopics, setTopicLanguage, archiveTopic, listArchivedTopics, restoreTopic } from './topics.js';
+export { createTopic, getTopic, listTopics, setTopicLanguage, archiveTopic, listArchivedTopics, restoreTopic, isAncestorOf, moveTopicToRoot, moveTopicInto, moveTopicBefore, moveTopicAfter } from './topics.js';
 export type { TopicRow } from './topics.js';
 export { runMigrations } from './migrate.js';
 export { insertMessage, getMessages, getRecentMessages, getMessageById, insertMention } from './messages.js';

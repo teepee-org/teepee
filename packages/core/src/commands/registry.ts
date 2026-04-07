@@ -4,6 +4,10 @@ import {
   topicRenameCommand,
   topicArchiveCommand,
   topicAliasCommand,
+  topicMoveRootCommand,
+  topicMoveIntoCommand,
+  topicMoveBeforeCommand,
+  topicMoveAfterCommand,
 } from './topic-commands.js';
 
 const commands = new Map<string, CommandDef>();
@@ -17,6 +21,10 @@ register(topicLanguageCommand);
 register(topicRenameCommand);
 register(topicArchiveCommand);
 register(topicAliasCommand);
+register(topicMoveRootCommand);
+register(topicMoveIntoCommand);
+register(topicMoveBeforeCommand);
+register(topicMoveAfterCommand);
 
 export function getCommand(name: string): CommandDef | undefined {
   return commands.get(name);

@@ -203,7 +203,7 @@ export function handleApiRoute(
     readBody(req).then((body) => {
       const { language } = JSON.parse(body);
       const topicId = parseInt(url.pathname.split('/')[3]);
-      const cmdCtx: CommandContext = { db: ctx.db, user: currentUser, topicId, broadcast: ctx.broadcast };
+      const cmdCtx: CommandContext = { db: ctx.db, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
       const result = executeCommand('topic.language', cmdCtx, { language });
       if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 403); }
     });
@@ -214,7 +214,7 @@ export function handleApiRoute(
     readBody(req).then((body) => {
       const { agent, alias } = JSON.parse(body);
       const topicId = parseInt(url.pathname.split('/')[3]);
-      const cmdCtx: CommandContext = { db: ctx.db, user: currentUser, topicId, broadcast: ctx.broadcast };
+      const cmdCtx: CommandContext = { db: ctx.db, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
       const result = executeCommand('topic.alias', cmdCtx, { agent, alias });
       if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 403); }
     });
@@ -228,6 +228,32 @@ export function handleApiRoute(
       agents: Object.keys(ctx.config.agents).length,
       users: listUsers(ctx.db).length,
       clients: ctx.clients.size,
+    });
+    return true;
+  }
+
+  // ── Topic move ──
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/move$/) && req.method === 'POST') {
+    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { action, targetId } = JSON.parse(body);
+        const topicId = parseInt(url.pathname.split('/')[3]);
+        const commandMap: Record<string, string> = {
+          root: 'topic.move.root',
+          into: 'topic.move.into',
+          before: 'topic.move.before',
+          after: 'topic.move.after',
+        };
+        const cmdName = commandMap[action];
+        if (!cmdName) { json({ error: `Invalid move action: ${action}` }, 400); return; }
+        const cmdCtx: CommandContext = { db: ctx.db, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
+        const result = executeCommand(cmdName, cmdCtx, { targetId });
+        if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
+      } catch (e: any) {
+        json({ error: e.message }, 400);
+      }
     });
     return true;
   }

@@ -51,6 +51,15 @@ export function startServer(
     }
   }
 
+  function broadcastGlobal(event: object) {
+    const data = JSON.stringify(event);
+    for (const client of clients) {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(data);
+      }
+    }
+  }
+
   const callbacks: OrchestratorCallbacks = {
     onJobStarted(topicId, jobId, agentName) {
       broadcast(topicId, { type: 'agent.job.started', topicId, jobId, agentName });
@@ -74,7 +83,7 @@ export function startServer(
   const orchestrator = new Orchestrator(db, config, basePath, callbacks);
 
   const ctx: ServerContext = {
-    config, db, basePath, port, ownerEmail, ownerSecret, orchestrator, clients, broadcast,
+    config, db, basePath, port, ownerEmail, ownerSecret, orchestrator, clients, broadcast, broadcastGlobal,
   };
 
   // ── HTTP ──

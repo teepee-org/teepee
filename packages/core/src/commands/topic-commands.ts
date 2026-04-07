@@ -1,4 +1,4 @@
-import { setTopicLanguage, archiveTopic, insertMessage, setAlias } from '../db.js';
+import { setTopicLanguage, archiveTopic, insertMessage, setAlias, moveTopicToRoot, moveTopicInto, moveTopicBefore, moveTopicAfter } from '../db.js';
 import type { CommandDef, CommandContext } from './types.js';
 
 export const topicLanguageCommand: CommandDef = {
@@ -61,5 +61,95 @@ export const topicAliasCommand: CommandDef = {
     insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
     ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
     return { ok: true, systemMessage: sysMsg };
+  },
+};
+
+// ── Topic move commands ──
+
+function notifyTopicsChanged(ctx: CommandContext) {
+  ctx.broadcastGlobal?.({ type: 'topics.changed' });
+}
+
+export const topicMoveRootCommand: CommandDef = {
+  name: 'topic.move.root',
+  help: '/topic move root — move current topic to root level',
+  minRole: 'user',
+  execute(ctx: CommandContext) {
+    try {
+      moveTopicToRoot(ctx.db, ctx.topicId);
+      const sysMsg = 'Topic moved to root level.';
+      insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
+      ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+      notifyTopicsChanged(ctx);
+      return { ok: true, systemMessage: sysMsg };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  },
+};
+
+export const topicMoveIntoCommand: CommandDef = {
+  name: 'topic.move.into',
+  help: '/topic move into <topic-id> — move current topic inside target topic',
+  minRole: 'user',
+  execute(ctx: CommandContext, params: Record<string, any>) {
+    const targetId = Number(params.targetId);
+    if (!targetId || isNaN(targetId)) {
+      return { ok: false, error: 'Missing or invalid target topic ID' };
+    }
+    try {
+      moveTopicInto(ctx.db, ctx.topicId, targetId);
+      const sysMsg = `Topic moved inside topic #${targetId}.`;
+      insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
+      ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+      notifyTopicsChanged(ctx);
+      return { ok: true, systemMessage: sysMsg };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  },
+};
+
+export const topicMoveBeforeCommand: CommandDef = {
+  name: 'topic.move.before',
+  help: '/topic move before <topic-id> — move current topic before target topic',
+  minRole: 'user',
+  execute(ctx: CommandContext, params: Record<string, any>) {
+    const targetId = Number(params.targetId);
+    if (!targetId || isNaN(targetId)) {
+      return { ok: false, error: 'Missing or invalid target topic ID' };
+    }
+    try {
+      moveTopicBefore(ctx.db, ctx.topicId, targetId);
+      const sysMsg = `Topic moved before topic #${targetId}.`;
+      insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
+      ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+      notifyTopicsChanged(ctx);
+      return { ok: true, systemMessage: sysMsg };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  },
+};
+
+export const topicMoveAfterCommand: CommandDef = {
+  name: 'topic.move.after',
+  help: '/topic move after <topic-id> — move current topic after target topic',
+  minRole: 'user',
+  execute(ctx: CommandContext, params: Record<string, any>) {
+    const targetId = Number(params.targetId);
+    if (!targetId || isNaN(targetId)) {
+      return { ok: false, error: 'Missing or invalid target topic ID' };
+    }
+    try {
+      moveTopicAfter(ctx.db, ctx.topicId, targetId);
+      const sysMsg = `Topic moved after topic #${targetId}.`;
+      insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
+      ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+      notifyTopicsChanged(ctx);
+      return { ok: true, systemMessage: sysMsg };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
   },
 };

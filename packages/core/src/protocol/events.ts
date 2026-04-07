@@ -50,6 +50,10 @@ export interface SystemEvent {
   text: string;
 }
 
+export interface TopicsChangedEvent {
+  type: 'topics.changed';
+}
+
 export interface ErrorEvent {
   type: 'error';
   message: string;
@@ -63,6 +67,7 @@ export type ServerEvent =
   | AgentJobCompletedEvent
   | AgentJobFailedEvent
   | SystemEvent
+  | TopicsChangedEvent
   | ErrorEvent;
 
 // ── Client → Server events ──

@@ -247,6 +247,10 @@ export function App() {
           }
           break;
 
+        case 'topics.changed':
+          fetchTopics().then(setTopics);
+          break;
+
       }
     },
     [activeTopicId, updateTopicJobs]
@@ -506,6 +510,17 @@ export function App() {
               send({ type: 'command', command: 'topic.rename', topicId: activeTopicId, name: parts.slice(2).join(' ') });
             } else if (sub === 'archive') {
               send({ type: 'command', command: 'topic.archive', topicId: activeTopicId });
+            } else if (sub === 'move') {
+              const action = parts[2]?.toLowerCase();
+              if (action === 'root') {
+                send({ type: 'command', command: 'topic.move.root', topicId: activeTopicId });
+              } else if (action === 'into' && parts[3]) {
+                send({ type: 'command', command: 'topic.move.into', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+              } else if (action === 'before' && parts[3]) {
+                send({ type: 'command', command: 'topic.move.before', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+              } else if (action === 'after' && parts[3]) {
+                send({ type: 'command', command: 'topic.move.after', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+              }
             }
             return;
           }

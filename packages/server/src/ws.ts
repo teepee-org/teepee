@@ -74,7 +74,7 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
 
           case 'command': {
             const { command: cmdName, topicId: cmdTopicId, ...cmdParams } = event;
-            const cmdCtx: CommandContext = { db: ctx.db, user: client.user, topicId: cmdTopicId, broadcast: ctx.broadcast };
+            const cmdCtx: CommandContext = { db: ctx.db, user: client.user, topicId: cmdTopicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
             const cmdResult = executeCommand(cmdName, cmdCtx, cmdParams);
             if (!cmdResult.ok) {
               ws.send(JSON.stringify({ type: 'error', message: cmdResult.error }));

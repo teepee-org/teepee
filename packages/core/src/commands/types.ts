@@ -8,6 +8,8 @@ export interface CommandContext {
   user: SessionUser;
   topicId: number;
   broadcast: (topicId: number, event: object) => void;
+  /** Broadcast to all connected clients regardless of topic subscription. */
+  broadcastGlobal?: (event: object) => void;
 }
 
 export interface CommandResult {

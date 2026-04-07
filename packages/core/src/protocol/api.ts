@@ -6,6 +6,8 @@ export interface TopicResponse {
   id: number;
   name: string;
   language: string | null;
+  parent_topic_id: number | null;
+  sort_order: number;
   archived: number;
   archived_at: string | null;
 }
