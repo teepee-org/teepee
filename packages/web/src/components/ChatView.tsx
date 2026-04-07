@@ -77,7 +77,7 @@ export function ChatView({ topicId, topicName, messages, agents, commands, activ
         ))}
         <div ref={messagesEndRef} />
       </div>
-      <ComposeBox agents={agents} commands={commands} onSend={onSend} />
+      <ComposeBox topicId={topicId} agents={agents} commands={commands} onSend={onSend} />
     </div>
   );
 }

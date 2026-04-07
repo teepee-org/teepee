@@ -422,7 +422,7 @@ export function App() {
   }, [sidebarCollapsed, toggleCollapsed]);
 
   const handleSend = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       // Helper: echo the typed command as a user message
       const echoCommand = (cmdText: string) => {
         setMessages((prev) => [
@@ -462,7 +462,7 @@ export function App() {
           case 'help':
             echoCommand(text);
             systemReply(buildHelpMarkdown());
-            return;
+            return true;
 
           case 'topics':
             echoCommand(text);
@@ -474,13 +474,13 @@ export function App() {
                   : t.map((tp) => `**#${tp.id}** ${tp.name}`).join('\n')
               );
             });
-            return;
+            return true;
 
           case 'join': {
             echoCommand(text);
             const id = parseInt(parts[1]);
-            if (!isNaN(id)) handleSelectTopic(id);
-            return;
+            if (!isNaN(id)) { handleSelectTopic(id); return true; }
+            return false;
           }
 
           case 'new': {
@@ -491,54 +491,63 @@ export function App() {
                 setTopics((prev) => [...prev, { ...topic, language: null, archived: 0 }]);
                 handleSelectTopic(topic.id);
               });
+              return true;
             }
-            return;
+            return false;
           }
 
           case 'agents':
             echoCommand(text);
             systemReply(agents.map((a) => `**@${a.name}** (${a.provider})`).join('\n'));
-            return;
+            return true;
 
           case 'topic': {
-            echoCommand(text);
             const sub = parts[1]?.toLowerCase();
-            if (!activeTopicId) return;
+            if (!activeTopicId) return false;
+            echoCommand(text);
             if (sub === 'language' && parts[2]) {
               send({ type: 'command', command: 'topic.language', topicId: activeTopicId, language: parts[2] });
+              return true;
             } else if (sub === 'rename' && parts.slice(2).join(' ')) {
               send({ type: 'command', command: 'topic.rename', topicId: activeTopicId, name: parts.slice(2).join(' ') });
+              return true;
             } else if (sub === 'archive') {
               send({ type: 'command', command: 'topic.archive', topicId: activeTopicId });
+              return true;
             } else if (sub === 'move') {
               const action = parts[2]?.toLowerCase();
               if (action === 'root') {
                 send({ type: 'command', command: 'topic.move.root', topicId: activeTopicId });
+                return true;
               } else if (action === 'into' && parts[3]) {
                 send({ type: 'command', command: 'topic.move.into', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+                return true;
               } else if (action === 'before' && parts[3]) {
                 send({ type: 'command', command: 'topic.move.before', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+                return true;
               } else if (action === 'after' && parts[3]) {
                 send({ type: 'command', command: 'topic.move.after', topicId: activeTopicId, targetId: parseInt(parts[3]) });
+                return true;
               }
             }
-            return;
+            return false;
           }
 
           case 'alias': {
+            if (!activeTopicId || parts.length < 3) return false;
             echoCommand(text);
-            if (!activeTopicId || parts.length < 3) return;
             const agent = parts[1].replace('@', '');
             const alias = parts[2].replace('@', '');
             send({ type: 'command', command: 'topic.alias', topicId: activeTopicId, agent, alias });
-            return;
+            return true;
           }
         }
-        return;
+        return false; // Unknown slash command
       }
 
-      if (!activeTopicId) return;
+      if (!activeTopicId) return false;
       send({ type: 'message.send', topicId: activeTopicId, body: text });
+      return true;
     },
     [activeTopicId, send, agents, handleSelectTopic, authUser]
   );

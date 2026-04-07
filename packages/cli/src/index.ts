@@ -317,7 +317,8 @@ switch (command) {
       if (detectedProviders.includes('ollama')) {
         console.log('Note: the default Ollama command uses qwen2.5-coder:7b. Change the model name if needed.');
       }
-      console.log('Edit it if needed, then run: teepee start');
+      console.log('Edit it if needed, then run: npx teepee-cli start');
+      console.log('If you install teepee-cli globally, you can use: teepee start');
       break;
     }
 

@@ -4,19 +4,62 @@ import type { CommandDef } from '../buildHelpMarkdown';
 
 type AutocompleteMode = 'agent' | 'command' | null;
 
+// Module-level history map — survives component unmount/remount (Admin view, no active topic)
+const historyMap = new Map<number, string[]>();
+
+/** Exported for testing only. */
+export function _resetHistoryForTests() {
+  historyMap.clear();
+}
+
 interface Props {
+  topicId: number;
   agents: Agent[];
   commands: CommandDef[];
-  onSend: (text: string) => void;
+  /** Returns true if the input was meaningfully dispatched, false for no-ops. */
+  onSend: (text: string) => boolean;
   disabled?: boolean;
 }
 
-export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
+export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Props) {
   const [text, setText] = useState('');
   const [acMode, setAcMode] = useState<AutocompleteMode>(null);
   const [autocompleteFilter, setAutocompleteFilter] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // ── Per-topic compose history ──
+  const [historyIndex, setHistoryIndex] = useState(-1); // -1 = not navigating
+  const [historyDraft, setHistoryDraft] = useState('');
+
+  // Reset history navigation when topic changes
+  useEffect(() => {
+    setHistoryIndex(-1);
+    setHistoryDraft('');
+  }, [topicId]);
+
+  function getHistory(): string[] {
+    return historyMap.get(topicId) || [];
+  }
+
+  function pushHistory(entry: string) {
+    if (!entry.trim()) return;
+    let list = historyMap.get(topicId);
+    if (!list) {
+      list = [];
+      historyMap.set(topicId, list);
+    }
+    list.push(entry);
+  }
+
+  // Scroll selected autocomplete item into view
+  useEffect(() => {
+    const dropdown = dropdownRef.current;
+    if (!dropdown || !acMode) return;
+    const item = dropdown.children[selectedIdx] as HTMLElement | undefined;
+    if (item) item.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx, acMode]);
 
   const filteredAgents = agents.filter((a) =>
     a.name.toLowerCase().startsWith(autocompleteFilter.toLowerCase())
@@ -30,6 +73,7 @@ export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Autocomplete takes priority over everything
       if (acMode) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
@@ -65,15 +109,54 @@ export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
         }
       }
 
+      // History navigation: only when composer is empty and no autocomplete
+      if (!acMode && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const history = getHistory();
+        if (e.key === 'ArrowUp') {
+          if (history.length === 0) return;
+          // Only start navigation from empty composer
+          if (historyIndex === -1 && text !== '') return;
+          e.preventDefault();
+          if (historyIndex === -1) {
+            // Entering history mode — save current text as draft
+            setHistoryDraft(text);
+            const idx = history.length - 1;
+            setHistoryIndex(idx);
+            setText(history[idx]);
+          } else if (historyIndex > 0) {
+            const idx = historyIndex - 1;
+            setHistoryIndex(idx);
+            setText(history[idx]);
+          }
+          return;
+        }
+        if (e.key === 'ArrowDown' && historyIndex !== -1) {
+          e.preventDefault();
+          if (historyIndex < history.length - 1) {
+            const idx = historyIndex + 1;
+            setHistoryIndex(idx);
+            setText(history[idx]);
+          } else {
+            // Past the end — restore draft
+            setHistoryIndex(-1);
+            setText(historyDraft);
+          }
+          return;
+        }
+      }
+
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (text.trim() && !disabled) {
-          onSend(text.trim());
+          const accepted = onSend(text.trim());
+          if (accepted) pushHistory(text.trim());
           setText('');
+          setHistoryIndex(-1);
+          setHistoryDraft('');
         }
       }
     },
-    [acMode, acItems, filteredAgents, filteredCommands, selectedIdx, text, disabled, onSend]
+    [acMode, acItems, filteredAgents, filteredCommands, selectedIdx, text, disabled, onSend, historyIndex, historyDraft, topicId]
   );
 
   const insertMention = (name: string) => {
@@ -117,6 +200,12 @@ export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
     const value = e.target.value;
     setText(value);
 
+    // User typed something — exit history navigation
+    if (historyIndex !== -1) {
+      setHistoryIndex(-1);
+      setHistoryDraft('');
+    }
+
     const pos = e.target.selectionStart;
     const before = value.slice(0, pos);
 
@@ -159,7 +248,7 @@ export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
   return (
     <div className="compose-box">
       {acMode === 'agent' && filteredAgents.length > 0 && (
-        <div className="autocomplete-dropdown">
+        <div className="autocomplete-dropdown" ref={dropdownRef}>
           {filteredAgents.map((agent, i) => (
             <div
               key={agent.name}
@@ -173,7 +262,7 @@ export function ComposeBox({ agents, commands, onSend, disabled }: Props) {
         </div>
       )}
       {acMode === 'command' && filteredCommands.length > 0 && (
-        <div className="autocomplete-dropdown">
+        <div className="autocomplete-dropdown" ref={dropdownRef}>
           {filteredCommands.map((cmd, i) => (
             <div
               key={cmd.command}

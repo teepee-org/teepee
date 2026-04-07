@@ -73,6 +73,13 @@ npx teepee-cli start
 
 Run this in the root of the project you want Teepee to work on. On first run, Teepee creates `.teepee/config.yaml` and exits. It keeps its state for that project in `.teepee/`.
 
+If you prefer a global install, run:
+
+```bash
+npm install -g teepee-cli
+teepee start
+```
+
 The generated config tries to detect installed agent CLIs such as `claude`, `codex`, and `ollama`, and uses what it finds. If none are detected, Teepee writes a commented starter template for you to edit manually.
 
 **3. Start again**
