@@ -56,7 +56,7 @@ export function ChatView({ topicId, topicName, messages, agents, commands, activ
             </svg>
           </button>
         )}
-        <h2>#{topicId} {topicName}</h2>
+        <h2>{topicName} <span className="topic-id">#{topicId}</span></h2>
       </div>
       <div
         className="chat-messages"

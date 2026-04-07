@@ -21,7 +21,7 @@ export function TopicList({ topics, activeTopicId, onSelectTopic, onCreateTopic 
             className={topic.id === activeTopicId ? 'active' : ''}
             onClick={() => onSelectTopic(topic.id)}
           >
-            <span className="topic-name">#{topic.id} {topic.name}</span>
+            <span className="topic-name">{topic.name} <span className="topic-id">#{topic.id}</span></span>
           </li>
         ))}
       </ul>

@@ -6,6 +6,7 @@ interface Props {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   archiveCount?: number;
+  isOwner?: boolean;
 }
 
 const TopicsIcon = () => (
@@ -29,13 +30,13 @@ const SettingsIcon = () => (
   </svg>
 );
 
-const views: { id: ActivityView; Icon: () => JSX.Element; label: string }[] = [
+const views: { id: ActivityView; Icon: () => React.JSX.Element; label: string }[] = [
   { id: 'topics', Icon: TopicsIcon, label: 'Topics' },
   { id: 'archive', Icon: ArchiveIcon, label: 'Archive' },
   { id: 'settings', Icon: SettingsIcon, label: 'Settings' },
 ];
 
-export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onToggleSidebar, archiveCount }: Props) {
+export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onToggleSidebar, archiveCount, isOwner }: Props) {
   const handleClick = (view: ActivityView) => {
     if (view === activeView && !sidebarCollapsed) {
       onToggleSidebar();
@@ -45,9 +46,11 @@ export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onTogg
     }
   };
 
+  const visibleViews = isOwner ? views : views.filter((v) => v.id !== 'settings');
+
   return (
     <div className="activity-bar">
-      {views.map(({ id, Icon, label }) => (
+      {visibleViews.map(({ id, Icon, label }) => (
         <button
           key={id}
           className={`activity-bar-icon ${id === activeView ? 'active' : ''}`}

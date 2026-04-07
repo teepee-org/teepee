@@ -14,12 +14,11 @@ interface Agent {
 
 interface Props {
   agents: Agent[];
-  onBack: () => void;
 }
 
 type Section = 'users' | 'invite' | 'agents' | 'settings';
 
-export function AdminPage({ agents, onBack }: Props) {
+export function AdminPage({ agents }: Props) {
   const [section, setSection] = useState<Section>('users');
   const [users, setUsers] = useState<User[]>([]);
 
@@ -126,7 +125,6 @@ export function AdminPage({ agents, onBack }: Props) {
   return (
     <div className="admin-page">
       <div className="admin-nav">
-        <button className="admin-back" onClick={onBack}>&larr; Back</button>
         <h1>Settings</h1>
         <ul>
           <li className={section === 'users' ? 'active' : ''} onClick={() => setSection('users')}>Users</li>
