@@ -5,11 +5,18 @@ interface User {
   handle: string | null;
   role: string;
   status: string;
+  revoked_at?: string | null;
 }
 
 interface Agent {
   name: string;
   provider: string;
+}
+
+interface PermissionRule {
+  target_agent: string;
+  allowed: number;
+  topic_id: number | null;
 }
 
 interface Props {
@@ -32,14 +39,33 @@ export function AdminPage({ agents }: Props) {
 
   // User detail
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  const [userPerms, setUserPerms] = useState<PermissionRule[]>([]);
+
+  // Revoked section
+  const [revokedExpanded, setRevokedExpanded] = useState(false);
+
+  // Delete confirmation
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState<string | null>(null);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
 
   const loadUsers = () => {
     fetch('/api/users').then((r) => r.json()).then(setUsers);
   };
 
+  const loadPermissions = (email: string) => {
+    fetch(`/api/admin/permissions/${encodeURIComponent(email)}`)
+      .then((r) => r.json())
+      .then(setUserPerms);
+  };
+
   useEffect(() => {
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    if (selectedUser) loadPermissions(selectedUser);
+    else setUserPerms([]);
+  }, [selectedUser]);
 
   // Reset invite agent selection when toggling
   useEffect(() => {
@@ -111,6 +137,28 @@ export function AdminPage({ agents }: Props) {
     if (selectedUser === email) setSelectedUser(null);
   };
 
+  const handleReEnable = async (email: string) => {
+    if (!confirm(`Re-enable access for ${email}?`)) return;
+    await fetch('/api/admin/re-enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    loadUsers();
+  };
+
+  const handleDeletePermanently = async (email: string) => {
+    await fetch('/api/admin/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    setDeleteConfirmEmail(null);
+    setDeleteConfirmInput('');
+    loadUsers();
+    if (selectedUser === email) setSelectedUser(null);
+  };
+
   const handleSetPermission = async (email: string, agent: string, allowed: boolean) => {
     const endpoint = allowed ? '/api/admin/allow' : '/api/admin/deny';
     await fetch(endpoint, {
@@ -118,9 +166,58 @@ export function AdminPage({ agents }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, agents: agent }),
     });
+    loadPermissions(email);
+  };
+
+  const getPermState = (agent: string): 'allowed' | 'denied' | null => {
+    // Check specific rule first, then wildcard
+    const specific = userPerms.find((p) => p.target_agent === agent);
+    if (specific) return specific.allowed ? 'allowed' : 'denied';
+    const wildcard = userPerms.find((p) => p.target_agent === '*');
+    if (wildcard) return wildcard.allowed ? 'allowed' : 'denied';
+    return null;
   };
 
   const selectedUserData = users.find((u) => u.email === selectedUser);
+  const activeUsers = users.filter((u) => u.status !== 'revoked');
+  const revokedUsers = users.filter((u) => u.status === 'revoked');
+
+  const renderUserActions = (u: User) => {
+    if (u.role === 'owner') return null;
+    return (
+      <div className="admin-row-actions">
+        <button onClick={() => setSelectedUser(u.email)}>Permissions</button>
+        {u.status === 'revoked' ? (
+          <>
+            <button className="btn-success" onClick={() => handleReEnable(u.email)}>Re-enable</button>
+            <button className="danger" onClick={() => { setDeleteConfirmEmail(u.email); setDeleteConfirmInput(''); }}>Delete</button>
+          </>
+        ) : (
+          <>
+            <button className="danger" onClick={() => handleRevoke(u.email)}>Revoke</button>
+            <button className="danger" onClick={() => { setDeleteConfirmEmail(u.email); setDeleteConfirmInput(''); }}>Delete</button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderUserRow = (u: User) => (
+    <tr key={u.email}>
+      <td>{u.email}</td>
+      <td>{u.handle || <span className="muted">pending</span>}</td>
+      <td><span className={`role-badge role-${u.role}`}>{u.role}</span></td>
+      <td>
+        <span className={`status-badge status-${u.status}`}>{u.status}</span>
+        {u.status === 'revoked' && u.revoked_at && (
+          <span className="muted" style={{ marginLeft: 6, fontSize: '0.85em' }}>
+            {new Date(u.revoked_at).toLocaleDateString()}
+          </span>
+        )}
+      </td>
+      <td>{renderUserActions(u)}</td>
+    </tr>
+  );
 
   return (
     <div className="admin-page">
@@ -135,6 +232,37 @@ export function AdminPage({ agents }: Props) {
       </div>
 
       <div className="admin-content">
+        {/* ─── Delete confirmation dialog ─── */}
+        {deleteConfirmEmail && (
+          <div className="modal-overlay" onClick={() => setDeleteConfirmEmail(null)}>
+            <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete user permanently</h3>
+              <p>
+                This will permanently remove <strong>{deleteConfirmEmail}</strong> and all associated data
+                (sessions, tokens, permissions, usage logs). This action cannot be undone.
+              </p>
+              <p>Type <strong>DELETE</strong> to confirm:</p>
+              <input
+                type="text"
+                value={deleteConfirmInput}
+                onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                placeholder="Type DELETE"
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button onClick={() => setDeleteConfirmEmail(null)}>Cancel</button>
+                <button
+                  className="danger"
+                  disabled={deleteConfirmInput !== 'DELETE'}
+                  onClick={() => handleDeletePermanently(deleteConfirmEmail)}
+                >
+                  Delete permanently
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ─── Users ─── */}
         {section === 'users' && !selectedUser && (
           <div>
@@ -151,26 +279,36 @@ export function AdminPage({ agents }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
-                  <tr key={u.email}>
-                    <td>{u.email}</td>
-                    <td>{u.handle || <span className="muted">pending</span>}</td>
-                    <td><span className={`role-badge role-${u.role}`}>{u.role}</span></td>
-                    <td><span className={`status-badge status-${u.status}`}>{u.status}</span></td>
-                    <td>
-                      {u.role !== 'owner' && (
-                        <div className="admin-row-actions">
-                          <button onClick={() => setSelectedUser(u.email)}>Permissions</button>
-                          {u.status !== 'revoked' && (
-                            <button className="danger" onClick={() => handleRevoke(u.email)}>Revoke</button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {activeUsers.map(renderUserRow)}
               </tbody>
             </table>
+
+            {revokedUsers.length > 0 && (
+              <div className="revoked-section">
+                <button
+                  className="revoked-toggle"
+                  onClick={() => setRevokedExpanded(!revokedExpanded)}
+                >
+                  {revokedExpanded ? '\u25BC' : '\u25B6'} Revoked users ({revokedUsers.length})
+                </button>
+                {revokedExpanded && (
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Email</th>
+                        <th>Handle</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {revokedUsers.map(renderUserRow)}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -182,44 +320,53 @@ export function AdminPage({ agents }: Props) {
             <p className="admin-desc">Control which agents this user can tag.</p>
 
             <div className="perm-grid">
-              {agents.map((a) => (
-                <div key={a.name} className="perm-row">
-                  <span className="perm-agent">@{a.name}</span>
-                  <span className="perm-provider">{a.provider}</span>
-                  <div className="perm-buttons">
-                    <button
-                      className="perm-btn allow"
-                      onClick={() => handleSetPermission(selectedUserData.email, a.name, true)}
-                    >
-                      Allow
-                    </button>
-                    <button
-                      className="perm-btn deny"
-                      onClick={() => handleSetPermission(selectedUserData.email, a.name, false)}
-                    >
-                      Deny
-                    </button>
+              {agents.map((a) => {
+                const state = getPermState(a.name);
+                return (
+                  <div key={a.name} className="perm-row">
+                    <span className="perm-agent">@{a.name}</span>
+                    <span className="perm-provider">{a.provider}</span>
+                    <div className="perm-buttons">
+                      <button
+                        className={`perm-btn allow${state === 'allowed' ? ' active' : ''}`}
+                        onClick={() => handleSetPermission(selectedUserData.email, a.name, true)}
+                      >
+                        Allow
+                      </button>
+                      <button
+                        className={`perm-btn deny${state === 'denied' ? ' active' : ''}`}
+                        onClick={() => handleSetPermission(selectedUserData.email, a.name, false)}
+                      >
+                        Deny
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-              <div className="perm-row">
-                <span className="perm-agent">All agents</span>
-                <span className="perm-provider">*</span>
-                <div className="perm-buttons">
-                  <button
-                    className="perm-btn allow"
-                    onClick={() => handleSetPermission(selectedUserData.email, '*', true)}
-                  >
-                    Allow all
-                  </button>
-                  <button
-                    className="perm-btn deny"
-                    onClick={() => handleSetPermission(selectedUserData.email, '*', false)}
-                  >
-                    Deny all
-                  </button>
-                </div>
-              </div>
+                );
+              })}
+              {(() => {
+                const wildcardPerm = userPerms.find((p) => p.target_agent === '*');
+                const wState = wildcardPerm ? (wildcardPerm.allowed ? 'allowed' : 'denied') : null;
+                return (
+                  <div className="perm-row">
+                    <span className="perm-agent">All agents</span>
+                    <span className="perm-provider">*</span>
+                    <div className="perm-buttons">
+                      <button
+                        className={`perm-btn allow${wState === 'allowed' ? ' active' : ''}`}
+                        onClick={() => handleSetPermission(selectedUserData.email, '*', true)}
+                      >
+                        Allow all
+                      </button>
+                      <button
+                        className={`perm-btn deny${wState === 'denied' ? ' active' : ''}`}
+                        onClick={() => handleSetPermission(selectedUserData.email, '*', false)}
+                      >
+                        Deny all
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

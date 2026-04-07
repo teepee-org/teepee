@@ -8,6 +8,8 @@ import {
   setPermission,
   createInviteToken,
   revokeUserFull,
+  reEnableUser,
+  deleteUserPermanently,
   executeCommand,
   listArchivedTopics,
   restoreTopic,
@@ -70,6 +72,39 @@ export function handleApiRoute(
       revokeUserFull(ctx.db, email);
       json({ ok: true });
     });
+    return true;
+  }
+
+  if (url.pathname === '/api/admin/re-enable' && req.method === 'POST') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { email } = JSON.parse(body);
+        const ok = reEnableUser(ctx.db, email);
+        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot re-enable: user not found, not revoked, or is owner' }, 400); }
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/admin/delete' && req.method === 'POST') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { email } = JSON.parse(body);
+        const ok = deleteUserPermanently(ctx.db, email);
+        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot delete: user not found or is owner' }, 400); }
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/admin\/permissions\/[^/]+$/) && req.method === 'GET') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    const email = decodeURIComponent(url.pathname.split('/')[4]);
+    const { getPermissions } = require('teepee-core');
+    const perms = getPermissions(ctx.db, email, null);
+    json(perms);
     return true;
   }
 

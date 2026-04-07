@@ -672,7 +672,14 @@ export function App() {
             </button>
           )}
           {authUser.role === 'owner' && (
-            <button className="admin-btn" onClick={() => setActiveView('settings')} title="Admin">
+            <button
+              className="admin-btn"
+              onClick={() => {
+                setSidebarOpen(false);
+                setActiveView('settings');
+              }}
+              title="Admin"
+            >
               Admin
             </button>
           )}

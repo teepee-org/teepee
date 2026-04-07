@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS users (
     handle TEXT UNIQUE,
     role TEXT NOT NULL DEFAULT 'user',
     status TEXT NOT NULL DEFAULT 'invited',
+    pre_revocation_status TEXT,
+    revoked_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     accepted_at TEXT,
     last_login_at TEXT
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS topics (
     name TEXT NOT NULL,
     language TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

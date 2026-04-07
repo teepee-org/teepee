@@ -835,6 +835,101 @@ body {
   border-color: var(--error);
 }
 
+.admin-row-actions button.btn-success:hover {
+  color: #22c55e;
+  border-color: #22c55e;
+}
+
+/* Revoked section */
+.revoked-section {
+  margin-top: 24px;
+}
+
+.revoked-toggle {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 0;
+  margin-bottom: 8px;
+}
+
+.revoked-toggle:hover {
+  color: var(--text-primary);
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  max-width: 440px;
+  width: 90%;
+}
+
+.modal-dialog h3 {
+  margin: 0 0 12px;
+  color: var(--error);
+}
+
+.modal-dialog p {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.modal-dialog input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.modal-actions button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.modal-actions button.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
+.modal-actions button.danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Forms */
 .form-group {
   margin-bottom: 20px;
@@ -1054,8 +1149,10 @@ body {
 
 .perm-btn.allow { color: var(--success); }
 .perm-btn.allow:hover { border-color: var(--success); background: rgba(76,175,80,0.1); }
+.perm-btn.allow.active { border-color: var(--success); background: rgba(76,175,80,0.2); font-weight: 600; }
 .perm-btn.deny { color: var(--error); }
 .perm-btn.deny:hover { border-color: var(--error); background: rgba(244,67,54,0.1); }
+.perm-btn.deny.active { border-color: var(--error); background: rgba(244,67,54,0.2); font-weight: 600; }
 
 /* Settings info */
 .settings-info {

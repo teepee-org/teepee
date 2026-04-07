@@ -6,7 +6,7 @@ import { App } from './App';
 Element.prototype.scrollIntoView = vi.fn();
 
 // Mock fetch to simulate authenticated owner with topics/agents
-const MOCK_SESSION = { email: 'owner@localhost', handle: 'owner', role: 'owner' };
+const MOCK_SESSION = { email: 'owner@localhost', handle: 'owner', role: 'owner', status: 'active' };
 const MOCK_TOPICS = [
   { id: 1, name: 'test-topic', language: null, archived: 0 },
 ];
@@ -77,10 +77,14 @@ async function renderApp() {
   return result!;
 }
 
+function getTopicItem() {
+  return screen.getByText('test-topic').closest('li') as HTMLElement;
+}
+
 describe('/help command', () => {
   async function openTopic() {
     await renderApp();
-    const topicItem = screen.getByText('#1 test-topic');
+    const topicItem = getTopicItem();
     await act(async () => { fireEvent.click(topicItem); });
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Type a message/)).toBeTruthy();
@@ -157,7 +161,7 @@ describe('Mobile sidebar drawer state', () => {
     expect(document.querySelector('.sidebar')!.classList.contains('open')).toBe(true);
 
     // Click on topic in list
-    const topicItem = screen.getByText('#1 test-topic');
+    const topicItem = getTopicItem();
     await act(async () => { fireEvent.click(topicItem); });
     expect(document.querySelector('.sidebar')!.classList.contains('open')).toBe(false);
   });
@@ -175,10 +179,12 @@ describe('Mobile sidebar drawer state', () => {
 
     // Should be on admin page now
     expect(screen.getByText('Settings')).toBeTruthy();
+    expect(document.querySelector('.sidebar')!.classList.contains('open')).toBe(false);
+    expect(document.querySelector('.sidebar-overlay')).toBeNull();
 
-    // Go back
-    const backBtn = screen.getByText(/Back/);
-    await act(async () => { fireEvent.click(backBtn); });
+    // Return to topics via the activity bar
+    const topicsBtn = screen.getByRole('button', { name: 'Topics' });
+    await act(async () => { fireEvent.click(topicsBtn); });
 
     // Sidebar should NOT be open
     const sidebar = document.querySelector('.sidebar');

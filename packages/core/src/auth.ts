@@ -262,13 +262,54 @@ export function revokeUserFull(
   db: DatabaseType,
   email: string
 ): boolean {
-  const result = db
-    .prepare("UPDATE users SET status = 'revoked' WHERE email = ?")
-    .run(email);
-  if (result.changes > 0) {
-    deleteUserSessions(db, email);
-    invalidateUserTokens(db, email);
-    return true;
-  }
-  return false;
+  const user = getUser(db, email);
+  if (!user || user.status === 'revoked') return false;
+  if (user.role === 'owner') return false;
+
+  db.prepare(
+    `UPDATE users SET pre_revocation_status = status, status = 'revoked', revoked_at = datetime('now') WHERE email = ?`
+  ).run(email);
+
+  deleteUserSessions(db, email);
+  invalidateUserTokens(db, email);
+  return true;
+}
+
+export function reEnableUser(
+  db: DatabaseType,
+  email: string
+): boolean {
+  const row = db.prepare(
+    `SELECT status, pre_revocation_status, role FROM users WHERE email = ?`
+  ).get(email) as { status: string; pre_revocation_status: string | null; role: string } | undefined;
+
+  if (!row || row.status !== 'revoked') return false;
+  if (row.role === 'owner') return false;
+
+  // Restore to pre-revocation status, fallback to 'active' for legacy rows
+  const restoreTo = row.pre_revocation_status || 'active';
+
+  db.prepare(
+    `UPDATE users SET status = ?, pre_revocation_status = NULL, revoked_at = NULL WHERE email = ?`
+  ).run(restoreTo, email);
+
+  return true;
+}
+
+export function deleteUserPermanently(
+  db: DatabaseType,
+  email: string
+): boolean {
+  const user = getUser(db, email);
+  if (!user) return false;
+  if (user.role === 'owner') return false;
+
+  // Purge all user-linked data
+  db.prepare('DELETE FROM sessions WHERE email = ?').run(email);
+  db.prepare('DELETE FROM login_tokens WHERE email = ?').run(email);
+  db.prepare('DELETE FROM permissions WHERE email = ?').run(email);
+  db.prepare('DELETE FROM usage_log WHERE user_email = ?').run(email);
+  db.prepare('DELETE FROM users WHERE email = ?').run(email);
+
+  return true;
 }

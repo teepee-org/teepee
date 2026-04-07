@@ -5,6 +5,7 @@ export interface UserRow {
   handle: string | null;
   role: string;
   status: string;
+  revoked_at?: string | null;
 }
 
 export function createUser(db: DatabaseType, email: string, role: string): void {
@@ -27,7 +28,7 @@ export function getUserByHandle(db: DatabaseType, handle: string): UserRow | und
 }
 
 export function listUsers(db: DatabaseType): UserRow[] {
-  return db.prepare('SELECT email, handle, role, status FROM users ORDER BY created_at').all() as UserRow[];
+  return db.prepare('SELECT email, handle, role, status, revoked_at FROM users ORDER BY created_at').all() as UserRow[];
 }
 
 export function revokeUser(db: DatabaseType, email: string): boolean {
