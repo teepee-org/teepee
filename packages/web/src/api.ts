@@ -1,5 +1,5 @@
 import type { Topic, Agent, Message } from './types';
-import type { ProjectResponse, StatusResponse, DividerResponse, SubjectResponse } from 'teepee-core';
+import type { ProjectResponse, StatusResponse } from 'teepee-core';
 
 const BASE = '/api';
 
@@ -67,99 +67,7 @@ export async function setTopicAlias(
   });
 }
 
-// ── Dividers ──
-
-export async function fetchDividers(): Promise<DividerResponse[]> {
-  const res = await fetch(`${BASE}/dividers`);
-  return res.json();
-}
-
-export async function apiCreateDivider(name: string): Promise<DividerResponse> {
-  const res = await fetch(`${BASE}/dividers`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-  return res.json();
-}
-
-export async function apiRenameDivider(id: number, name: string): Promise<void> {
-  await fetch(`${BASE}/dividers/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-}
-
-export async function apiDeleteDivider(id: number): Promise<void> {
-  await fetch(`${BASE}/dividers/${id}`, { method: 'DELETE' });
-}
-
-export async function apiReorderDividers(orderedIds: number[]): Promise<void> {
-  await fetch(`${BASE}/dividers/reorder`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ orderedIds }),
-  });
-}
-
-// ── Subjects ──
-
-export async function fetchSubjects(): Promise<SubjectResponse[]> {
-  const res = await fetch(`${BASE}/subjects`);
-  return res.json();
-}
-
-export async function apiCreateSubject(
-  name: string,
-  dividerId?: number | null,
-  parentId?: number | null
-): Promise<SubjectResponse> {
-  const res = await fetch(`${BASE}/subjects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, dividerId, parentId }),
-  });
-  return res.json();
-}
-
-export async function apiRenameSubject(id: number, name: string): Promise<void> {
-  await fetch(`${BASE}/subjects/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-}
-
-export async function apiDeleteSubject(id: number): Promise<void> {
-  await fetch(`${BASE}/subjects/${id}`, { method: 'DELETE' });
-}
-
-export async function apiMoveSubject(id: number, dividerId?: number | null, parentId?: number | null): Promise<void> {
-  await fetch(`${BASE}/subjects/${id}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dividerId, parentId }),
-  });
-}
-
-export async function apiReorderSubjects(parentId: number | null, orderedIds: number[]): Promise<void> {
-  await fetch(`${BASE}/subjects/reorder`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parentId, orderedIds }),
-  });
-}
-
-// ── Topic organization ──
-
-export async function apiMoveTopic(topicId: number, dividerId?: number | null, subjectId?: number | null): Promise<void> {
-  await fetch(`${BASE}/topics/${topicId}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dividerId, subjectId }),
-  });
-}
+// ── Archive ──
 
 export async function apiArchiveTopic(topicId: number): Promise<void> {
   await fetch(`${BASE}/topics/${topicId}/archive`, { method: 'POST' });

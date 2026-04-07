@@ -7,26 +7,7 @@ export interface TopicResponse {
   name: string;
   language: string | null;
   archived: number;
-  divider_id: number | null;
-  subject_id: number | null;
-  position: number;
-  archived_divider_id: number | null;
-  archived_subject_id: number | null;
   archived_at: string | null;
-}
-
-export interface DividerResponse {
-  id: number;
-  name: string;
-  position: number;
-}
-
-export interface SubjectResponse {
-  id: number;
-  name: string;
-  divider_id: number | null;
-  parent_id: number | null;
-  position: number;
 }
 
 export interface AgentResponse {

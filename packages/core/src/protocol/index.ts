@@ -9,7 +9,6 @@ export type {
   AgentJobFailedEvent,
   SystemEvent,
   ErrorEvent,
-  OrganizationEvent,
   TopicJoinEvent,
   TopicLeaveEvent,
   MessageSendEvent,
@@ -18,8 +17,6 @@ export type {
 
 export type {
   TopicResponse,
-  DividerResponse,
-  SubjectResponse,
   AgentResponse,
   UserResponse,
   ProjectResponse,

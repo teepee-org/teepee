@@ -106,17 +106,4 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS dividers (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS subjects (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    divider_id INTEGER REFERENCES dividers(id) ON DELETE SET NULL,
-    parent_id INTEGER REFERENCES subjects(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL DEFAULT 0
-);
 `;

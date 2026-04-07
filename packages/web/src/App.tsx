@@ -10,15 +10,10 @@ import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
 import {
   fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage,
-  fetchDividers, fetchSubjects, fetchArchivedTopics,
-  apiCreateDivider, apiRenameDivider, apiDeleteDivider,
-  apiCreateSubject, apiRenameSubject, apiDeleteSubject,
-  apiMoveTopic, apiArchiveTopic, apiRestoreTopic,
-  apiReorderDividers, apiReorderSubjects,
+  fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic,
 } from './api';
 import type { ProjectInfo } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
-import type { DividerResponse, SubjectResponse } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface ActiveJob {
@@ -64,12 +59,9 @@ export function App() {
   const [activeTopicId, setActiveTopicId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [jobsByTopic, setJobsByTopic] = useState<Record<number, ActiveJob[]>>({});
-  const [showAdmin, setShowAdmin] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [demoRun, setDemoRun] = useState<DemoRunState | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
-  const [dividers, setDividers] = useState<DividerResponse[]>([]);
-  const [subjects, setSubjects] = useState<SubjectResponse[]>([]);
   const [archivedTopics, setArchivedTopics] = useState<Topic[]>([]);
   const [activeView, setActiveView] = useState<ActivityView>(() => {
     return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
@@ -108,8 +100,6 @@ export function App() {
     if (!authUser) return;
     fetchTopics().then(setTopics);
     fetchAgents().then(setAgents);
-    fetchDividers().then(setDividers);
-    fetchSubjects().then(setSubjects);
     fetchArchivedTopics().then(setArchivedTopics);
     fetchProject().then((p) => {
       setProject(p);
@@ -257,21 +247,6 @@ export function App() {
           }
           break;
 
-        case 'organization.changed': {
-          // Reload organization data on any change
-          const kind = event.change.kind;
-          if (kind.startsWith('divider.')) {
-            fetchDividers().then(setDividers);
-          }
-          if (kind.startsWith('subject.')) {
-            fetchSubjects().then(setSubjects);
-          }
-          if (kind === 'topic.moved' || kind === 'topic.restored') {
-            fetchTopics().then(setTopics);
-            fetchArchivedTopics().then(setArchivedTopics);
-          }
-          break;
-        }
       }
     },
     [activeTopicId, updateTopicJobs]
@@ -316,54 +291,6 @@ export function App() {
     handleSelectTopic(topic.id);
   }, [handleSelectTopic]);
 
-  // Organization handlers
-  const handleCreateDivider = useCallback(async (name: string) => {
-    const d = await apiCreateDivider(name);
-    setDividers((prev) => [...prev, d]);
-  }, []);
-
-  const handleRenameDivider = useCallback(async (id: number, name: string) => {
-    await apiRenameDivider(id, name);
-    setDividers((prev) => prev.map((d) => d.id === id ? { ...d, name } : d));
-  }, []);
-
-  const handleDeleteDivider = useCallback(async (id: number) => {
-    await apiDeleteDivider(id);
-    setDividers((prev) => prev.filter((d) => d.id !== id));
-    fetchTopics().then(setTopics);
-  }, []);
-
-  const handleCreateSubject = useCallback(async (name: string, dividerId?: number | null, parentId?: number | null) => {
-    const s = await apiCreateSubject(name, dividerId, parentId);
-    setSubjects((prev) => [...prev, s]);
-  }, []);
-
-  const handleRenameSubject = useCallback(async (id: number, name: string) => {
-    await apiRenameSubject(id, name);
-    setSubjects((prev) => prev.map((s) => s.id === id ? { ...s, name } : s));
-  }, []);
-
-  const handleDeleteSubject = useCallback(async (id: number) => {
-    await apiDeleteSubject(id);
-    setSubjects((prev) => prev.filter((s) => s.id !== id));
-    fetchTopics().then(setTopics);
-  }, []);
-
-  const handleReorderDividers = useCallback(async (orderedIds: number[]) => {
-    await apiReorderDividers(orderedIds);
-    fetchDividers().then(setDividers);
-  }, []);
-
-  const handleReorderSubjects = useCallback(async (parentId: number | null, orderedIds: number[]) => {
-    await apiReorderSubjects(parentId, orderedIds);
-    fetchSubjects().then(setSubjects);
-  }, []);
-
-  const handleMoveTopic = useCallback(async (topicId: number, dividerId?: number | null, subjectId?: number | null) => {
-    await apiMoveTopic(topicId, dividerId, subjectId);
-    fetchTopics().then(setTopics);
-  }, []);
-
   const handleArchiveTopic = useCallback(async (topicId: number) => {
     await apiArchiveTopic(topicId);
     setTopics((prev) => prev.filter((t) => t.id !== topicId));
@@ -382,11 +309,7 @@ export function App() {
 
   const handleChangeView = useCallback((view: ActivityView) => {
     setActiveView(view);
-    if (view === 'settings' && authUser?.role === 'owner') {
-      setSidebarOpen(false);
-      setShowAdmin(true);
-    }
-  }, [authUser]);
+  }, []);
 
   const sleep = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
 
@@ -607,11 +530,6 @@ export function App() {
 
   const activeTopic = topics.find((t) => t.id === activeTopicId);
 
-  // Admin page (full screen)
-  if (showAdmin && authUser?.role === 'owner') {
-    return <AdminPage agents={agents} onBack={() => { setShowAdmin(false); setSidebarOpen(false); }} />;
-  }
-
   // Loading
   if (authLoading) {
     return (
@@ -653,8 +571,6 @@ export function App() {
       return (
         <ArchiveList
           archivedTopics={archivedTopics}
-          dividers={dividers}
-          subjects={subjects}
           onRestore={handleRestoreTopic}
           userRole={authUser.role}
         />
@@ -664,21 +580,10 @@ export function App() {
     return (
       <TopicTree
         topics={activeTopics}
-        dividers={dividers}
-        subjects={subjects}
         activeTopicId={activeTopicId}
         onSelectTopic={handleSelectTopic}
         onCreateTopic={handleCreateTopic}
-        onCreateDivider={handleCreateDivider}
-        onRenameDivider={handleRenameDivider}
-        onDeleteDivider={handleDeleteDivider}
-        onCreateSubject={handleCreateSubject}
-        onRenameSubject={handleRenameSubject}
-        onDeleteSubject={handleDeleteSubject}
-        onMoveTopic={handleMoveTopic}
         onArchiveTopic={handleArchiveTopic}
-        onReorderDividers={handleReorderDividers}
-        onReorderSubjects={handleReorderSubjects}
         userRole={authUser.role}
       />
     );
@@ -693,10 +598,11 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleCollapsed}
         archiveCount={archivedTopics.length}
+        isOwner={authUser.role === 'owner'}
       />
       <aside
-        className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''} ${resizing ? 'resizing' : ''}`}
-        style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+        className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed || activeView === 'settings' ? 'collapsed' : ''} ${resizing ? 'resizing' : ''}`}
+        style={{ width: sidebarCollapsed || activeView === 'settings' ? 0 : sidebarWidth }}
       >
         <div className="sidebar-header">
           <span className={`connection-dot ${connected ? 'connected' : ''}`} />
@@ -726,8 +632,8 @@ export function App() {
             </button>
             {authUser.role === 'owner' && (
               <button
-                className="drawer-view-btn"
-                onClick={() => { setSidebarOpen(false); setShowAdmin(true); }}
+                className={`drawer-view-btn ${activeView === 'settings' ? 'active' : ''}`}
+                onClick={() => { setSidebarOpen(false); setActiveView('settings'); }}
                 aria-label="Settings"
                 title="Settings"
               >
@@ -766,7 +672,7 @@ export function App() {
             </button>
           )}
           {authUser.role === 'owner' && (
-            <button className="admin-btn" onClick={() => { setSidebarOpen(false); setShowAdmin(true); }} title="Admin">
+            <button className="admin-btn" onClick={() => setActiveView('settings')} title="Admin">
               Admin
             </button>
           )}
@@ -775,7 +681,9 @@ export function App() {
         <div className={`sidebar-resize-handle ${resizing ? 'dragging' : ''}`} {...handleProps} />
       </aside>
       <main className="main">
-        {activeTopic ? (
+        {activeView === 'settings' && authUser.role === 'owner' ? (
+          <AdminPage agents={agents} />
+        ) : activeTopic ? (
           <ChatView
             topicId={activeTopic.id}
             topicName={activeTopic.name}
