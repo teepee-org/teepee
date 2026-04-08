@@ -16,7 +16,7 @@ import {
 import { parseMentions, resolveAliases } from './mentions.js';
 import { filterAllowedAgents } from './permissions.js';
 import { buildContext, runAgent } from './executor.js';
-import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
+import { resolveExecutionPolicy, applyInsecureOverride, validateSandboxAvailability } from './execution-policy.js';
 import type { UserRole } from './commands/types.js';
 import type { SandboxRunner } from './sandbox/runner.js';
 import { detectSandboxAvailability, type SandboxDetectionResult } from './sandbox/detect.js';
@@ -29,6 +29,10 @@ export interface OrchestratorCallbacks {
   onSystemMessage(topicId: number, text: string): void;
 }
 
+export interface OrchestratorOptions {
+  insecure?: boolean;
+}
+
 export class Orchestrator {
   private db: DatabaseType;
   private config: TeepeeConfig;
@@ -38,6 +42,7 @@ export class Orchestrator {
   private sandboxRunner: SandboxRunner;
   private sandboxAvailable: boolean;
   private sandboxBackend: string;
+  private insecure: boolean;
 
   // Track active jobs per agent per topic
   private activeJobs = new Map<string, Promise<void>>();
@@ -46,12 +51,14 @@ export class Orchestrator {
     db: DatabaseType,
     config: TeepeeConfig,
     basePath: string,
-    callbacks: OrchestratorCallbacks
+    callbacks: OrchestratorCallbacks,
+    options: OrchestratorOptions = {}
   ) {
     this.db = db;
     this.config = config;
     this.basePath = basePath;
     this.callbacks = callbacks;
+    this.insecure = options.insecure || false;
     this.knownAgents = new Set(Object.keys(config.agents));
     const sandbox = detectSandboxAvailability({
       preferredRunner: config.security.sandbox.runner,
@@ -253,11 +260,16 @@ export class Orchestrator {
     // Resolve execution policy
     const agentConfig = this.config.agents[agentName];
     const providerConfig = this.config.providers[agentConfig.provider];
-    const policy = resolveExecutionPolicy(
+    let policy = resolveExecutionPolicy(
       requesterRole,
       agentConfig.capability,
       this.config.security
     );
+
+    // In insecure mode, promote sandbox to host
+    if (this.insecure) {
+      policy = applyInsecureOverride(policy);
+    }
 
     // Record execution metadata
     const effectiveMode: ExecutionMode = policy.mode;

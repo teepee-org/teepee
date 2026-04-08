@@ -20,4 +20,6 @@ export interface ServerContext {
   broadcast: (topicId: number, event: object) => void;
   /** Broadcast to all connected clients regardless of topic subscription. */
   broadcastGlobal: (event: object) => void;
+  insecure: boolean;
+  bindHost: string;
 }

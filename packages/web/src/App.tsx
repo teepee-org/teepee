@@ -615,6 +615,11 @@ export function App() {
 
   return (
     <div className="app">
+      {project?.securityMode === 'insecure' && (
+        <div className="insecure-banner">
+          INSECURE MODE — Sandboxing is disabled. For local evaluation and trusted users only.
+        </div>
+      )}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <ActivityBar
         activeView={activeView}

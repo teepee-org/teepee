@@ -188,6 +188,8 @@ export function handleApiRoute(
       path: ctx.basePath,
       language: ctx.config.teepee.language,
       gitBranch,
+      securityMode: ctx.insecure ? 'insecure' : 'secure',
+      bindHost: ctx.bindHost,
       demo: (ctx.config.teepee as any).demo,
     });
     return true;

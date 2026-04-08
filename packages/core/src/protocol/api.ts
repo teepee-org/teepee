@@ -29,6 +29,8 @@ export interface ProjectResponse {
   path: string;
   language: string;
   gitBranch: string | null;
+  securityMode: 'secure' | 'insecure';
+  bindHost: string;
   demo?: {
     enabled: boolean;
     topic_name: string;

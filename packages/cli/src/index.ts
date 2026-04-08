@@ -15,6 +15,7 @@ import {
   revokeUserFull,
 } from 'teepee-core';
 import { startServer } from 'teepee-server';
+import { isLoopbackHost, parseServeArgs } from './cli-utils.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -54,7 +55,14 @@ Package:
   teepee <command>               Once installed globally
 
 Usage:
-  teepee start [--port <port>]    Start server in the current project root
+  teepee start [options]          Start server in the current project root
+  teepee serve [options]          Alias for start
+
+  Options:
+    --port <port>                 Server port (default: 3000)
+    --host <addr>                 Bind address (default: 127.0.0.1)
+    --insecure                    Disable sandbox enforcement (local eval only)
+
   teepee stop                     Stop server
   teepee status                   Show status
 
@@ -298,9 +306,9 @@ async function showUpdateStatus(forceRefresh = false) {
 }
 
 switch (command) {
-  case 'start': {
-    const portIdx = args.indexOf('--port');
-    const port = portIdx !== -1 ? parseInt(args[portIdx + 1]) : 3000;
+  case 'start':
+  case 'serve': {
+    const { port, host, insecure } = parseServeArgs(args);
 
     ensureDir();
 
@@ -317,12 +325,30 @@ switch (command) {
       if (detectedProviders.includes('ollama')) {
         console.log('Note: the default Ollama command uses qwen2.5-coder:7b. Change the model name if needed.');
       }
-      console.log('Edit it if needed, then run: npx teepee-cli start');
-      console.log('If you install teepee-cli globally, you can use: teepee start');
+      console.log('Edit it if needed, then run: npx teepee-cli serve --insecure');
+      console.log('If you install teepee-cli globally, you can use: teepee serve --insecure');
+      console.log('For secure/shared deployments, use: teepee start');
       break;
     }
 
-    const { server } = startServer(configPath, port);
+    if (insecure) {
+      console.log('');
+      console.log('WARNING: Teepee is running in INSECURE mode.');
+      console.log('Sandboxing is disabled.');
+      console.log('Runnable agents may access files outside the project, including the');
+      console.log("host user's home directory and other readable disk paths.");
+      console.log('Use only for local demos or with users you fully trust.');
+      console.log('Do not expose this mode to untrusted users or public networks.');
+      if (!isLoopbackHost(host)) {
+        console.log('');
+        console.log('DANGER: You are binding to a non-loopback address in insecure mode.');
+        console.log('Any user who can reach this address will have agent access to your');
+        console.log('full readable disk. Only proceed if you trust ALL users on this network.');
+      }
+      console.log('');
+    }
+
+    const { server } = startServer(configPath, port, { host, insecure });
 
     // Save PID
     fs.writeFileSync(pidFile, String(process.pid));

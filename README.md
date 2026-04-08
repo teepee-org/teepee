@@ -14,9 +14,27 @@ Agents can also hand off work to each other: one agent writes the task, tags the
 
 Teepee is a product by TypeEffect.
 
+## Quick local eval
+
+Try Teepee in under 5 minutes. Run this from the root of any project:
+
+```bash
+npx teepee-cli serve --insecure
 ```
+
+On first run, Teepee creates `.teepee/config.yaml` and exits. Run the command again to start the server. Open the owner link printed in the terminal.
+
+> **Warning:** `--insecure` disables sandbox enforcement. Agents may access files outside the project, including the host user's home directory and other readable disk paths. Use only for local evaluation or with users you fully trust. Do not expose this mode to untrusted users or public networks.
+
+## Secure / shared setup
+
+For shared or persistent use, run Teepee with sandboxing enabled (the default):
+
+```bash
 npx teepee-cli start
 ```
+
+This requires a sandbox backend (bubblewrap on Linux, Docker on macOS). Non-owner agent runs are confined to the project directory. See [Execution policy](#execution-policy) below for details.
 
 The npm package is `teepee-cli`. If you install it globally, it exposes the `teepee` binary.
 
@@ -25,6 +43,7 @@ The npm package is `teepee-cli`. If you install it globally, it exposes the `tee
 - Run Teepee from the root of the project you want it to work on
 - Install Node.js 20+
 - Install at least one agent CLI locally, such as `claude`, `codex`, or `ollama`
+- For secure/shared use: install a sandbox backend (`apt install bubblewrap` on Linux, or Docker)
 
 ## Why Teepee
 
@@ -39,56 +58,28 @@ Teepee is for the moment when "open a few terminals and coordinate agents by han
 - Keep everything self-hosted and close to the codebase
 - Let coding agents operate on the real project (sandboxed for non-owners, full access for owners)
 
-## Quick start
+## Getting started
 
-**1. Create a config**
-
-```yaml
-# .teepee/config.yaml
-teepee:
-  name: my-project
-
-providers:
-  claude:
-    command: "claude -p --permission-mode acceptEdits"
-  codex:
-    command: "codex exec"
-
-agents:
-  coder:
-    provider: claude
-  reviewer:
-    provider: claude
-  architect:
-    provider: codex
-  devops:
-    provider: codex
-```
-
-**2. Start**
+**1. Run Teepee**
 
 ```bash
-npx teepee-cli start
+npx teepee-cli serve --insecure   # local eval (no sandbox needed)
+# or
+npx teepee-cli start              # secure mode (sandbox required for non-owner runs)
 ```
 
-Run this in the root of the project you want Teepee to work on. On first run, Teepee creates `.teepee/config.yaml` and exits. It keeps its state for that project in `.teepee/`.
+On first run, Teepee creates `.teepee/config.yaml` and exits. It auto-detects installed agent CLIs (`claude`, `codex`, `ollama`). Edit the config if needed, then run the command again.
 
-If you prefer a global install, run:
+If you prefer a global install:
 
 ```bash
 npm install -g teepee-cli
-teepee start
+teepee serve --insecure
 ```
 
-The generated config tries to detect installed agent CLIs such as `claude`, `codex`, and `ollama`, and uses what it finds. If none are detected, Teepee writes a commented starter template for you to edit manually.
+**2. Open the owner link**
 
-**3. Start again**
-
-```bash
-npx teepee-cli start
-```
-
-Now Teepee starts the server and prints the owner login link. Open it, create a topic, and start chatting.
+Teepee prints an owner login URL to the terminal. Open it to access the workspace.
 
 **4. Tag agents**
 
@@ -269,8 +260,8 @@ Agent CLI (claude -p, codex exec, ...)
 One Teepee = one project. To work on multiple projects, run multiple instances on different ports:
 
 ```bash
-cd ~/api && npx teepee-cli start --port 3000
-cd ~/web && npx teepee-cli start --port 3001
+cd ~/api && npx teepee-cli serve --port 3000
+cd ~/web && npx teepee-cli serve --port 3001
 ```
 
 ## Adding an agent
@@ -314,6 +305,8 @@ Provider commands run according to the **execution policy**:
   - `sandbox_only` — always sandboxed, even for owner.
   - `disabled` — agent cannot be run by anyone.
 - Chained agent calls inherit the original requester's policy. A non-owner cannot escalate by asking one agent to trigger another.
+
+**`--insecure` mode:** When started with `teepee serve --insecure`, sandbox enforcement is disabled entirely. All runnable agents execute in host mode regardless of the requester's role. Disabled agents remain disabled. This mode is intended only for local evaluation or fully trusted environments. The web UI shows a persistent warning banner when insecure mode is active.
 
 **Sandbox backends:**
 

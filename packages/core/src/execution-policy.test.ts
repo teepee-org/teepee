@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
+import { resolveExecutionPolicy, applyInsecureOverride, validateSandboxAvailability } from './execution-policy.js';
 import type { SecurityConfig } from './config.js';
 
 const defaultSecurity: SecurityConfig = {
@@ -81,6 +81,24 @@ describe('resolveExecutionPolicy', () => {
       role_defaults: { owner: '' as any, user: 'sandbox', observer: 'disabled' },
     };
     const result = resolveExecutionPolicy('owner', 'host_allowed', corrupted);
+    expect(result.mode).toBe('disabled');
+  });
+});
+
+describe('applyInsecureOverride', () => {
+  it('promotes sandbox to host', () => {
+    const result = applyInsecureOverride({ mode: 'sandbox', reason: 'agent is sandbox_only' });
+    expect(result.mode).toBe('host');
+    expect(result.reason).toContain('--insecure');
+  });
+
+  it('keeps host as host', () => {
+    const result = applyInsecureOverride({ mode: 'host', reason: "role 'owner' defaults to 'host'" });
+    expect(result.mode).toBe('host');
+  });
+
+  it('keeps disabled as disabled', () => {
+    const result = applyInsecureOverride({ mode: 'disabled', reason: 'agent is disabled' });
     expect(result.mode).toBe('disabled');
   });
 });

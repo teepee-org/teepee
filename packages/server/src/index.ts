@@ -21,10 +21,18 @@ import { setupWebSocket } from './ws.js';
 
 export type { ServerContext, ClientState } from './context.js';
 
+export interface StartServerOptions {
+  host?: string;
+  insecure?: boolean;
+}
+
 export function startServer(
   configPath: string,
-  port: number = 3000
+  port: number = 3000,
+  options: StartServerOptions = {}
 ): { server: http.Server; close: () => void } {
+  const bindHost = options.host || '127.0.0.1';
+  const insecure = options.insecure || false;
   const config = loadConfig(configPath);
   const teepeeDir = path.dirname(path.resolve(configPath));
   const basePath = path.dirname(teepeeDir);
@@ -80,10 +88,11 @@ export function startServer(
     },
   };
 
-  const orchestrator = new Orchestrator(db, config, basePath, callbacks);
+  const orchestrator = new Orchestrator(db, config, basePath, callbacks, { insecure });
 
   const ctx: ServerContext = {
     config, db, basePath, port, ownerEmail, ownerSecret, orchestrator, clients, broadcast, broadcastGlobal,
+    insecure, bindHost,
   };
 
   // ── HTTP ──
@@ -117,22 +126,29 @@ export function startServer(
   const server = http.createServer(httpHandler);
   const wss = setupWebSocket(server, ctx);
 
-  server.listen(port, '0.0.0.0', () => {
-    const { networkInterfaces } = require('os');
-    const nets = networkInterfaces();
-    const ips: string[] = [];
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) ips.push(net.address);
-      }
-    }
+  const isLoopback = bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
+
+  server.listen(port, bindHost, () => {
     console.log(`\nTeepee started:\n`);
     console.log(`  Owner login (local):  http://localhost:${port}/auth/owner/${ownerSecret}`);
-    if (ips.length > 0) {
-      console.log(`  Owner login (remote): http://${ips[0]}:${port}/auth/owner/${ownerSecret}`);
+    if (!isLoopback) {
+      const { networkInterfaces } = require('os');
+      const nets = networkInterfaces();
+      const ips: string[] = [];
+      for (const name of Object.keys(nets)) {
+        for (const net of nets[name] || []) {
+          if (net.family === 'IPv4' && !net.internal) ips.push(net.address);
+        }
+      }
+      if (ips.length > 0) {
+        console.log(`  Owner login (remote): http://${ips[0]}:${port}/auth/owner/${ownerSecret}`);
+      }
     }
     console.log(`\n  Project: ${config.teepee.name}`);
     console.log(`  Agents:  ${Object.keys(config.agents).join(', ')}`);
+    if (insecure) {
+      console.log(`  Mode:    INSECURE (sandbox disabled)`);
+    }
     console.log(`\n  Open the owner login link to get started.`);
     console.log(`  The secret changes on every restart.\n`);
   });

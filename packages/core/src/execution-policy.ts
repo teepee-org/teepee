@@ -61,6 +61,21 @@ export function resolveExecutionPolicy(
 }
 
 /**
+ * Apply insecure-mode override to a resolved policy.
+ *
+ * In insecure mode:
+ * - 'sandbox' is promoted to 'host' (sandbox enforcement disabled)
+ * - 'host' stays 'host'
+ * - 'disabled' stays 'disabled' (disabled agents remain disabled)
+ */
+export function applyInsecureOverride(policy: PolicyResult): PolicyResult {
+  if (policy.mode === 'sandbox') {
+    return { mode: 'host', reason: `${policy.reason} (overridden by --insecure)` };
+  }
+  return policy;
+}
+
+/**
  * Check whether the resolved mode requires sandboxing and whether
  * the sandbox backend is available. Returns an error string if the
  * run should be blocked, or null if it can proceed.

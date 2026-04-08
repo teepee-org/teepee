@@ -1,6 +1,6 @@
 {
   "name": "teepee-cli",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "CLI for Teepee, a self-hosted workspace to coordinate AI agents in realtime.",
   "bin": {
     "teepee": "dist/index.js",
@@ -10,11 +10,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "dependencies": {
-    "teepee-core": "^0.2.10",
-    "teepee-server": "^0.2.10"
+    "teepee-core": "^0.2.11",
+    "teepee-server": "^0.2.11"
   },
   "homepage": "https://teepee.org",
   "repository": {
@@ -31,6 +32,7 @@
   ],
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.3"
   }
 }

@@ -50,6 +50,27 @@ body {
   position: relative;
 }
 
+.insecure-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--warning);
+  color: #1a1a2e;
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  z-index: 1000;
+}
+
+.app:has(.insecure-banner) .sidebar,
+.app:has(.insecure-banner) .main,
+.app:has(.insecure-banner) .activity-bar {
+  margin-top: 32px;
+}
+
 .sidebar {
   width: 260px;
   background: var(--bg-secondary);

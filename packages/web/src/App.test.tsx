@@ -11,7 +11,8 @@ const MOCK_TOPICS = [
   { id: 1, name: 'test-topic', language: null, parent_topic_id: null, sort_order: 1, archived: 0, archived_at: null },
 ];
 const MOCK_AGENTS = [{ name: 'coder', provider: 'echo' }];
-const MOCK_PROJECT = { name: 'test', path: '/tmp', language: 'en', gitBranch: 'main', demo: { enabled: false, topic_name: '', hotkey: 'F1', delay_ms: 1200 } };
+const MOCK_PROJECT = { name: 'test', path: '/tmp', language: 'en', gitBranch: 'main', securityMode: 'secure', bindHost: '127.0.0.1', demo: { enabled: false, topic_name: '', hotkey: 'F1', delay_ms: 1200 } };
+const MOCK_PROJECT_INSECURE = { ...MOCK_PROJECT, securityMode: 'insecure' };
 const MOCK_MESSAGES = [
   { id: 1, topic_id: 1, author_type: 'user', author_name: 'owner', body: 'hello', created_at: '2026-01-01T00:00:00Z' },
 ];
@@ -192,5 +193,42 @@ describe('Mobile sidebar drawer state', () => {
     expect(sidebar!.classList.contains('open')).toBe(false);
     // No overlay
     expect(document.querySelector('.sidebar-overlay')).toBeNull();
+  });
+});
+
+describe('Insecure mode banner', () => {
+  it('does not show insecure banner in secure mode', async () => {
+    await renderApp();
+    expect(document.querySelector('.insecure-banner')).toBeNull();
+  });
+
+  it('shows insecure banner when securityMode is insecure', async () => {
+    // Override fetch to return insecure project
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/auth/session')) {
+        return Promise.resolve({ json: () => Promise.resolve(MOCK_SESSION) });
+      }
+      if (url.includes('/api/topics') && !url.includes('messages')) {
+        return Promise.resolve({ json: () => Promise.resolve(MOCK_TOPICS) });
+      }
+      if (url.includes('/api/agents')) {
+        return Promise.resolve({ json: () => Promise.resolve(MOCK_AGENTS) });
+      }
+      if (url.includes('/api/project')) {
+        return Promise.resolve({ json: () => Promise.resolve(MOCK_PROJECT_INSECURE) });
+      }
+      if (url.includes('/api/users')) {
+        return Promise.resolve({ json: () => Promise.resolve([MOCK_SESSION]) });
+      }
+      if (url.includes('/messages')) {
+        return Promise.resolve({ json: () => Promise.resolve(MOCK_MESSAGES) });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({}) });
+    }));
+
+    await renderApp();
+    const banner = document.querySelector('.insecure-banner');
+    expect(banner).toBeTruthy();
+    expect(banner!.textContent).toContain('INSECURE MODE');
   });
 });

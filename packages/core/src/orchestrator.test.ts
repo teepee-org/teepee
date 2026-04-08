@@ -248,6 +248,71 @@ describe('Orchestrator security', () => {
     expect(callbacks.calls.onJobFailed.length).toBe(1);
   });
 
+  it('insecure mode promotes user sandbox_only agent to host', async () => {
+    const config = makeConfig();
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    setPermission(db, 'user@test.com', null, '*', true);
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
+
+    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@reviewer review this');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('host');
+    expect(job.requested_by_email).toBe('user@test.com');
+  });
+
+  it('insecure mode still keeps disabled agents disabled', async () => {
+    const config = makeConfig();
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
+
+    const topicId = createTopic(db, 'test');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@disabled_agent do something');
+
+    expect(callbacks.calls.onJobFailed.length).toBe(1);
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('disabled');
+  });
+
+  it('insecure mode allows user + host_allowed to run as host', async () => {
+    const config = makeConfig();
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    setPermission(db, 'user@test.com', null, '*', true);
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
+    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('host');
+  });
+
+  it('secure mode still fails closed when sandbox required but unavailable', async () => {
+    const config = makeConfig({
+      security: {
+        role_defaults: { owner: 'host', user: 'sandbox', observer: 'disabled' },
+        sandbox: { runner: 'container', empty_home: true, private_tmp: true, forward_env: [] },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    setPermission(db, 'user@test.com', null, '*', true);
+
+    // Explicitly NOT insecure
+    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: false });
+    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.status).toBe('failed');
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.error).toContain('Sandbox required but not available');
+  });
+
   it('chained jobs inherit the original requester sandbox policy', async () => {
     const coderScript = path.join(tmpDir, 'coder.js');
     const chainedScript = path.join(tmpDir, 'chain-target.js');
