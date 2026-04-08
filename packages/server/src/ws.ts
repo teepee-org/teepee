@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import * as http from 'http';
+import * as crypto from 'crypto';
 import {
   getMessages,
   insertMessage,
@@ -9,6 +10,11 @@ import {
 import type { CommandContext } from 'teepee-core';
 import type { ServerContext, ClientState } from './context.js';
 import { authenticateRequest } from './http/utils.js';
+
+function broadcastPresence(ctx: ServerContext) {
+  const snapshot = ctx.getPresenceSnapshot();
+  ctx.broadcastGlobal({ type: 'presence.changed', presence: snapshot });
+}
 
 export function setupWebSocket(server: http.Server, ctx: ServerContext) {
   const wss = new WebSocketServer({ noServer: true });
@@ -32,8 +38,17 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
       ws.close(1008, 'Not authenticated');
       return;
     }
-    const client: ClientState = { ws, user, subscribedTopics: new Set() };
+    const client: ClientState = {
+      ws,
+      user,
+      subscribedTopics: new Set(),
+      sessionId: crypto.randomUUID(),
+      activeTopicId: null,
+      lastSeenAt: Date.now(),
+      lastBroadcastPresenceState: 'active',
+    };
     ctx.clients.add(client);
+    broadcastPresence(ctx);
 
     ws.on('message', async (raw) => {
       try {
@@ -81,6 +96,23 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
             }
             break;
           }
+
+          case 'presence.active_topic': {
+            client.activeTopicId = event.topicId ?? null;
+            client.lastSeenAt = Date.now();
+            client.lastBroadcastPresenceState = 'active';
+            broadcastPresence(ctx);
+            break;
+          }
+
+          case 'presence.heartbeat': {
+            client.lastSeenAt = Date.now();
+            if (client.lastBroadcastPresenceState === 'idle') {
+              client.lastBroadcastPresenceState = 'active';
+              broadcastPresence(ctx);
+            }
+            break;
+          }
         }
       } catch (err: any) {
         try {
@@ -89,7 +121,10 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
       }
     });
 
-    ws.on('close', () => { ctx.clients.delete(client); });
+    ws.on('close', () => {
+      ctx.clients.delete(client);
+      broadcastPresence(ctx);
+    });
   });
 
   return wss;

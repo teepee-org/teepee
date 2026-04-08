@@ -58,4 +58,6 @@ export interface InviteLinkResponse {
   token: string;
 }
 
+export type { PresenceEntry } from './events.js';
+
 export { MessageRow };

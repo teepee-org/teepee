@@ -71,6 +71,101 @@ body {
   margin-top: 32px;
 }
 
+/* Focus banner */
+.focus-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.focus-banner strong {
+  color: var(--accent);
+}
+
+.focus-banner button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.focus-banner button:hover {
+  background: var(--bg-input);
+}
+
+/* Presence panel */
+.presence-panel {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.presence-panel h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.presence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.presence-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.presence-dot.idle {
+  background: var(--text-muted);
+}
+
+.presence-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.presence-role {
+  font-size: 0.7em;
+  color: var(--text-muted);
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.presence-topic {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
 .sidebar {
   width: 260px;
   background: var(--bg-secondary);

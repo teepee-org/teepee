@@ -1,6 +1,7 @@
 import * as http from 'http';
 import {
   createTopic,
+  getTopic,
   listTopics,
   getMessages,
   createUser,
@@ -140,9 +141,11 @@ export function handleApiRoute(
   if (url.pathname === '/api/topics' && req.method === 'POST') {
     if (currentUser.role === 'observer') { json({ error: 'Observers cannot create topics' }, 403); return true; }
     readBody(req).then((body) => {
-      const { name } = JSON.parse(body);
-      const id = createTopic(ctx.db, name);
-      json({ id, name }, 201);
+      const { name, parentTopicId } = JSON.parse(body);
+      const id = createTopic(ctx.db, name, parentTopicId ?? null);
+      const topic = getTopic(ctx.db, id);
+      ctx.broadcastGlobal({ type: 'topics.changed' });
+      json(topic ?? { id, name }, 201);
     });
     return true;
   }
@@ -223,6 +226,11 @@ export function handleApiRoute(
     return true;
   }
 
+  if (url.pathname === '/api/presence' && req.method === 'GET') {
+    json(ctx.getPresenceSnapshot());
+    return true;
+  }
+
   if (url.pathname === '/api/status' && req.method === 'GET') {
     json({
       name: ctx.config.teepee.name,
@@ -271,6 +279,7 @@ export function handleApiRoute(
     if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
     const topicId = parseInt(url.pathname.split('/')[3]);
     archiveTopic(ctx.db, topicId);
+    ctx.broadcastGlobal({ type: 'topics.changed' });
     json({ ok: true });
     return true;
   }
@@ -279,6 +288,7 @@ export function handleApiRoute(
     if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
     const topicId = parseInt(url.pathname.split('/')[3]);
     restoreTopic(ctx.db, topicId);
+    ctx.broadcastGlobal({ type: 'topics.changed' });
     json({ ok: true });
     return true;
   }

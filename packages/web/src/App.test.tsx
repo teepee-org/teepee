@@ -16,6 +16,10 @@ const MOCK_PROJECT_INSECURE = { ...MOCK_PROJECT, securityMode: 'insecure' };
 const MOCK_MESSAGES = [
   { id: 1, topic_id: 1, author_type: 'user', author_name: 'owner', body: 'hello', created_at: '2026-01-01T00:00:00Z' },
 ];
+const MOCK_PRESENCE = [
+  { sessionId: 's1', displayName: 'alice', role: 'owner', activeTopicId: 1, state: 'active', lastSeenAt: '2026-01-01T00:00:00Z' },
+  { sessionId: 's2', displayName: 'bob', role: 'user', activeTopicId: null, state: 'idle', lastSeenAt: '2026-01-01T00:00:00Z' },
+];
 
 let wsSendSpy: ReturnType<typeof vi.fn>;
 
@@ -45,24 +49,27 @@ beforeEach(() => {
   // Mock fetch
   vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
     if (url.includes('/auth/session')) {
-      return Promise.resolve({ json: () => Promise.resolve(MOCK_SESSION) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SESSION) });
     }
     if (url.includes('/api/topics') && !url.includes('messages')) {
-      return Promise.resolve({ json: () => Promise.resolve(MOCK_TOPICS) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_TOPICS) });
     }
     if (url.includes('/api/agents')) {
-      return Promise.resolve({ json: () => Promise.resolve(MOCK_AGENTS) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_AGENTS) });
     }
     if (url.includes('/api/project')) {
-      return Promise.resolve({ json: () => Promise.resolve(MOCK_PROJECT) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) });
     }
     if (url.includes('/api/users')) {
-      return Promise.resolve({ json: () => Promise.resolve([MOCK_SESSION]) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([MOCK_SESSION]) });
+    }
+    if (url.includes('/api/presence')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PRESENCE) });
     }
     if (url.includes('/messages')) {
-      return Promise.resolve({ json: () => Promise.resolve(MOCK_MESSAGES) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MESSAGES) });
     }
-    return Promise.resolve({ json: () => Promise.resolve({}) });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
   }));
 });
 
@@ -193,6 +200,133 @@ describe('Mobile sidebar drawer state', () => {
     expect(sidebar!.classList.contains('open')).toBe(false);
     // No overlay
     expect(document.querySelector('.sidebar-overlay')).toBeNull();
+  });
+});
+
+// Helper: open a topic and return the input element
+async function openTopicAndGetInput() {
+  await renderApp();
+  const topicItem = getTopicItem();
+  await act(async () => { fireEvent.click(topicItem); });
+  await waitFor(() => {
+    expect(screen.getByPlaceholderText(/Type a message/)).toBeTruthy();
+  });
+  return screen.getByPlaceholderText(/Type a message/) as HTMLInputElement;
+}
+
+async function sendCommand(input: HTMLInputElement, cmd: string) {
+  await act(async () => {
+    fireEvent.change(input, { target: { value: cmd } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+  });
+}
+
+describe('/topic new command', () => {
+  it('creates a child topic under the current topic', async () => {
+    const input = await openTopicAndGetInput();
+    await sendCommand(input, '/topic new Sub-Topic');
+    // createTopic should be called with name and parentTopicId
+    await waitFor(() => {
+      const calls = (fetch as any).mock.calls;
+      const topicPost = calls.find((c: any[]) =>
+        typeof c[0] === 'string' && c[0].endsWith('/api/topics') &&
+        c[1]?.method === 'POST' &&
+        c[1]?.body?.includes('Sub-Topic')
+      );
+      expect(topicPost).toBeTruthy();
+      const body = JSON.parse(topicPost[1].body);
+      expect(body.name).toBe('Sub-Topic');
+      expect(body.parentTopicId).toBe(1); // current topic id
+    });
+  });
+});
+
+describe('/focus and /unfocus commands', () => {
+  it('/focus shows a focus banner', async () => {
+    const input = await openTopicAndGetInput();
+    await sendCommand(input, '/focus');
+    await waitFor(() => {
+      const banner = document.querySelector('.focus-banner');
+      expect(banner).toBeTruthy();
+      expect(banner!.textContent).toContain('test-topic');
+    });
+  });
+
+  it('/unfocus clears the focus banner', async () => {
+    const input = await openTopicAndGetInput();
+    await sendCommand(input, '/focus');
+    await waitFor(() => {
+      expect(document.querySelector('.focus-banner')).toBeTruthy();
+    });
+    await sendCommand(input, '/unfocus');
+    await waitFor(() => {
+      expect(document.querySelector('.focus-banner')).toBeNull();
+    });
+  });
+
+  it('clicking Show all clears focus', async () => {
+    const input = await openTopicAndGetInput();
+    await sendCommand(input, '/focus');
+    await waitFor(() => {
+      expect(document.querySelector('.focus-banner')).toBeTruthy();
+    });
+    const showAllBtn = document.querySelector('.focus-banner button') as HTMLElement;
+    await act(async () => { fireEvent.click(showAllBtn); });
+    expect(document.querySelector('.focus-banner')).toBeNull();
+  });
+});
+
+describe('/who command', () => {
+  it('shows online presence with idle state', async () => {
+    const input = await openTopicAndGetInput();
+    await sendCommand(input, '/who');
+    // The system reply is rendered as markdown in a message bubble.
+    // Search all messages for the who output.
+    await waitFor(() => {
+      const allText = document.body.textContent || '';
+      expect(allText).toContain('Online now');
+      expect(allText).toContain('alice');
+      expect(allText).toContain('bob');
+      expect(allText).toContain('(idle)');
+    });
+  });
+});
+
+describe('Online now panel', () => {
+  it('renders presence panel in the sidebar', async () => {
+    await renderApp();
+    await waitFor(() => {
+      const panel = document.querySelector('.presence-panel');
+      expect(panel).toBeTruthy();
+      expect(panel!.textContent).toContain('Online now');
+    });
+  });
+
+  it('shows active and idle users with dots and text labels', async () => {
+    await renderApp();
+    await waitFor(() => {
+      const dots = document.querySelectorAll('.presence-dot');
+      expect(dots.length).toBe(2); // alice and bob
+      // bob is idle
+      const idleDots = document.querySelectorAll('.presence-dot.idle');
+      expect(idleDots.length).toBe(1);
+      const meta = Array.from(document.querySelectorAll('.presence-role')).map((node) => node.textContent || '');
+      expect(meta.some((text) => text.includes('active'))).toBe(true);
+      expect(meta.some((text) => text.includes('idle'))).toBe(true);
+    });
+  });
+
+  it('shows user names and topic info', async () => {
+    await renderApp();
+    await waitFor(() => {
+      const names = document.querySelectorAll('.presence-name');
+      expect(names.length).toBe(2);
+      expect(names[0].textContent).toBe('alice');
+      expect(names[1].textContent).toBe('bob');
+      // alice has activeTopicId: 1
+      const topics = document.querySelectorAll('.presence-topic');
+      expect(topics[0].textContent).toContain('#1');
+    });
   });
 });
 

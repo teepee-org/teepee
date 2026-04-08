@@ -13,6 +13,11 @@ export type {
   TopicLeaveEvent,
   MessageSendEvent,
   CommandEvent,
+  PresenceChangedEvent,
+  PresenceActiveTopicEvent,
+  PresenceHeartbeatEvent,
+  PresenceEntry,
+  TopicsChangedEvent,
 } from './events.js';
 
 export type {

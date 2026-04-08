@@ -109,7 +109,9 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Multi-agent parallel** — Tag multiple agents in one message. They run simultaneously with isolated context.
 - **Agent chaining** — An agent's reply can mention another agent, triggering automatic follow-up. Configurable depth limits prevent loops.
 - **Human + agent collaboration** — Invite teammates with magic links, assign roles, and keep humans and agents in the same workspace.
-- **Hierarchical topics** — Topics can contain child topics, rendered with slight indentation and moved with simple slash commands.
+- **Hierarchical topics** — Topics can contain child topics, rendered with slight indentation and moved with simple slash commands. Use `/topic new <name>` to create a child under the current topic.
+- **Live presence** — See who is online and which topic each person is in. The sidebar shows a compact presence panel, and `/who` gives the full list.
+- **Focus mode** — Use `/focus` to narrow the sidebar to the current topic's subtree. `/unfocus` restores the full tree.
 - **Works on the real project** — Agents run in the project working directory, so they can read files, make changes, and keep the workflow attached to the codebase itself.
 - **Specialized roles** — Split work across `@coder`, `@reviewer`, `@architect`, `@devops`, or your own custom agents with per-agent prompts.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
@@ -118,6 +120,11 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Markdown native** — All messages are Markdown with syntax-highlighted code blocks, tables, and copy buttons.
 - **Web UI** — Clean dark-theme interface with topics, agent slots, and `@` autocomplete.
 - **Auth built in** — Owner login via secret link. Invite users with magic links. Role-based permissions (owner/user/observer). Deny-by-default agent tagging.
+
+## Releases
+
+- [CHANGELOG.md](./CHANGELOG.md) tracks shipped features and fixes.
+- [RELEASING.md](./RELEASING.md) documents the repeatable release flow for version bumps, npm publication, Pages updates, and GitHub releases.
 
 ## How it works
 
@@ -184,7 +191,8 @@ limits:
 /help                     — list commands
 /topics                   — list topics
 /join <id>                — switch to topic
-/new <name>               — create topic
+/new <name>               — create root topic
+/topic new <name>         — create child topic under current
 /topic language <lang>    — set topic language
 /topic rename <name>      — rename topic
 /topic archive            — archive topic
@@ -192,6 +200,9 @@ limits:
 /topic move into <id>     — move current topic inside another topic
 /topic move before <id>   — move current topic before another topic
 /topic move after <id>    — move current topic after another topic
+/focus                    — focus on current topic subtree
+/unfocus                  — show all topics
+/who                      — show who is online
 /alias @agent @short      — create alias
 /agents                   — list agents
 ```

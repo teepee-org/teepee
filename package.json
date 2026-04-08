@@ -1,6 +1,6 @@
 {
   "name": "teepee",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Teepee runs a team of AI agents — coordinating them in realtime.",
   "private": true,
   "workspaces": [
@@ -10,7 +10,9 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces --if-present",
     "dev": "npm run dev --workspace=packages/server",
-    "start": "node packages/cli/dist/index.js start"
+    "start": "node packages/cli/dist/index.js start",
+    "release:verify": "npm test && npm run build",
+    "release:pack": "npm pack --dry-run --workspace=packages/core && npm pack --dry-run --workspace=packages/server && npm pack --dry-run --workspace=packages/cli"
   },
   "engines": {
     "node": ">=20"

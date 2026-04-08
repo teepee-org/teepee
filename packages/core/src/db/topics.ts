@@ -12,12 +12,12 @@ export interface TopicRow {
 
 const TOPIC_COLS = 'id, name, language, parent_topic_id, sort_order, archived, archived_at';
 
-export function createTopic(db: DatabaseType, name: string): number {
-  // Place new topic at the end of root siblings
-  const maxOrder = db.prepare(
-    'SELECT COALESCE(MAX(sort_order), 0) AS m FROM topics WHERE parent_topic_id IS NULL'
-  ).get() as { m: number };
-  const result = db.prepare('INSERT INTO topics (name, sort_order) VALUES (?, ?)').run(name, maxOrder.m + 1);
+export function createTopic(db: DatabaseType, name: string, parentTopicId?: number | null): number {
+  const parentId = parentTopicId ?? null;
+  const maxOrder = maxSiblingOrder(db, parentId);
+  const result = parentId === null
+    ? db.prepare('INSERT INTO topics (name, sort_order) VALUES (?, ?)').run(name, maxOrder + 1)
+    : db.prepare('INSERT INTO topics (name, parent_topic_id, sort_order) VALUES (?, ?, ?)').run(name, parentId, maxOrder + 1);
   return Number(result.lastInsertRowid);
 }
 

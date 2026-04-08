@@ -31,6 +31,7 @@ export const topicRenameCommand: CommandDef = {
     const sysMsg = `Topic renamed to **${name}**`;
     insertMessage(ctx.db, ctx.topicId, 'system', 'teepee', sysMsg);
     ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+    ctx.broadcastGlobal?.({ type: 'topics.changed' });
     return { ok: true, systemMessage: sysMsg };
   },
 };
@@ -43,6 +44,7 @@ export const topicArchiveCommand: CommandDef = {
     archiveTopic(ctx.db, ctx.topicId);
     const sysMsg = 'Topic archived.';
     ctx.broadcast(ctx.topicId, { type: 'system', topicId: ctx.topicId, text: sysMsg });
+    ctx.broadcastGlobal?.({ type: 'topics.changed' });
     return { ok: true, systemMessage: sysMsg };
   },
 };

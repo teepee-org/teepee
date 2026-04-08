@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { TopicTree } from './components/TopicTree';
 import { ActivityBar } from './components/ActivityBar';
 import type { ActivityView } from './components/ActivityBar';
@@ -10,9 +10,9 @@ import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
 import {
   fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage,
-  fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic,
+  fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic, fetchPresence,
 } from './api';
-import type { ProjectInfo } from './api';
+import type { ProjectInfo, PresenceEntry } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
@@ -63,6 +63,8 @@ export function App() {
   const [demoRun, setDemoRun] = useState<DemoRunState | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
   const [archivedTopics, setArchivedTopics] = useState<Topic[]>([]);
+  const [focusedTopicId, setFocusedTopicId] = useState<number | null>(null);
+  const [presence, setPresence] = useState<PresenceEntry[]>([]);
   const [activeView, setActiveView] = useState<ActivityView>(() => {
     return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
   });
@@ -101,6 +103,7 @@ export function App() {
     fetchTopics().then(setTopics);
     fetchAgents().then(setAgents);
     fetchArchivedTopics().then(setArchivedTopics);
+    fetchPresence().then(setPresence);
     fetchProject().then((p) => {
       setProject(p);
       document.title = `${p.name} — Teepee`;
@@ -249,6 +252,11 @@ export function App() {
 
         case 'topics.changed':
           fetchTopics().then(setTopics);
+          fetchArchivedTopics().then(setArchivedTopics);
+          break;
+
+        case 'presence.changed':
+          setPresence((event as any).presence);
           break;
 
       }
@@ -257,6 +265,24 @@ export function App() {
   );
 
   const { send, connected } = useWebSocket(onEvent);
+
+  // Heartbeat for presence
+  useEffect(() => {
+    if (!connected) return;
+    const interval = setInterval(() => {
+      send({ type: 'presence.heartbeat' });
+    }, 25_000);
+    return () => clearInterval(interval);
+  }, [connected, send]);
+
+  // Re-send active topic on reconnect
+  const prevConnected = useRef(false);
+  useEffect(() => {
+    if (connected && !prevConnected.current && activeTopicId) {
+      send({ type: 'presence.active_topic', topicId: activeTopicId });
+    }
+    prevConnected.current = connected;
+  }, [connected, activeTopicId, send]);
 
   // Unsubscribe from topics that have no active jobs and aren't the current topic
   useEffect(() => {
@@ -283,15 +309,29 @@ export function App() {
       setMessages([]);
       setSidebarOpen(false);
       send({ type: 'topic.join', topicId });
+      send({ type: 'presence.active_topic', topicId });
+      // Auto-clear focus if joining outside focused subtree
+      setFocusedTopicId((prev) => {
+        if (!prev) return null;
+        // Check if topicId is within the focused subtree
+        const focusedIds = new Set<number>();
+        focusedIds.add(prev);
+        for (const t of topics) {
+          if (!t.archived && focusedIds.has(t.parent_topic_id!)) {
+            focusedIds.add(t.id);
+          }
+        }
+        return focusedIds.has(topicId) ? prev : null;
+      });
     },
-    [send]
+    [send, topics]
   );
 
   const handleCreateTopic = useCallback(async () => {
     const name = prompt('Topic name:');
     if (!name) return;
     const topic = await createTopic(name);
-    setTopics((prev) => [...prev, { ...topic, language: null, archived: 0 }]);
+    fetchTopics().then(setTopics);
     handleSelectTopic(topic.id);
   }, [handleSelectTopic]);
 
@@ -485,10 +525,14 @@ export function App() {
 
           case 'new': {
             echoCommand(text);
+            if (authUser?.role === 'observer') {
+              systemReply('Observers cannot create topics.');
+              return true;
+            }
             const name = parts.slice(1).join(' ');
             if (name) {
               createTopic(name).then((topic) => {
-                setTopics((prev) => [...prev, { ...topic, language: null, archived: 0 }]);
+                fetchTopics().then(setTopics);
                 handleSelectTopic(topic.id);
               });
               return true;
@@ -505,7 +549,18 @@ export function App() {
             const sub = parts[1]?.toLowerCase();
             if (!activeTopicId) return false;
             echoCommand(text);
-            if (sub === 'language' && parts[2]) {
+            if (sub === 'new' && parts.slice(2).join(' ')) {
+              if (authUser?.role === 'observer') {
+                systemReply('Observers cannot create topics.');
+                return true;
+              }
+              const childName = parts.slice(2).join(' ');
+              createTopic(childName, activeTopicId).then((topic) => {
+                fetchTopics().then(setTopics);
+                handleSelectTopic(topic.id);
+              });
+              return true;
+            } else if (sub === 'language' && parts[2]) {
               send({ type: 'command', command: 'topic.language', topicId: activeTopicId, language: parts[2] });
               return true;
             } else if (sub === 'rename' && parts.slice(2).join(' ')) {
@@ -541,6 +596,39 @@ export function App() {
             send({ type: 'command', command: 'topic.alias', topicId: activeTopicId, agent, alias });
             return true;
           }
+
+          case 'focus': {
+            if (!activeTopicId) return false;
+            echoCommand(text);
+            const focusTopic = topics.find((t) => t.id === activeTopicId);
+            setFocusedTopicId(activeTopicId);
+            systemReply(`Focused on **${focusTopic?.name || '#' + activeTopicId}**. Use \`/unfocus\` or click "Show all" to restore the full tree.`);
+            return true;
+          }
+
+          case 'unfocus': {
+            echoCommand(text);
+            setFocusedTopicId(null);
+            systemReply('Focus cleared. Showing all topics.');
+            return true;
+          }
+
+          case 'who': {
+            echoCommand(text);
+            if (presence.length === 0) {
+              systemReply('No one else is online.');
+            } else {
+              const lines = presence.map((p) => {
+                const topicInfo = p.activeTopicId
+                  ? `#${p.activeTopicId} ${topics.find((t) => t.id === p.activeTopicId)?.name || ''}`
+                  : 'no topic selected';
+                const idle = p.state === 'idle' ? ' (idle)' : '';
+                return `- **${p.displayName}** (${p.role}) — ${topicInfo}${idle}`;
+              });
+              systemReply(`Online now:\n${lines.join('\n')}`);
+            }
+            return true;
+          }
         }
         return false; // Unknown slash command
       }
@@ -549,10 +637,32 @@ export function App() {
       send({ type: 'message.send', topicId: activeTopicId, body: text });
       return true;
     },
-    [activeTopicId, send, agents, handleSelectTopic, authUser]
+    [activeTopicId, send, agents, handleSelectTopic, authUser, topics, presence]
   );
 
   const activeTopic = topics.find((t) => t.id === activeTopicId);
+  const activeTopics = topics.filter((t) => !t.archived);
+
+  // Focus mode: filter to focused subtree
+  const displayTopics = useMemo(() => {
+    if (!focusedTopicId) return activeTopics;
+    const focusedIds = new Set<number>();
+    if (!activeTopics.some((t) => t.id === focusedTopicId)) return activeTopics;
+    focusedIds.add(focusedTopicId);
+    for (const t of activeTopics) {
+      if (focusedIds.has(t.parent_topic_id!)) {
+        focusedIds.add(t.id);
+      }
+    }
+    return activeTopics.filter((t) => focusedIds.has(t.id));
+  }, [activeTopics, focusedTopicId]);
+
+  // Auto-clear focus if focused topic disappears
+  useEffect(() => {
+    if (focusedTopicId && !activeTopics.some((t) => t.id === focusedTopicId)) {
+      setFocusedTopicId(null);
+    }
+  }, [activeTopics, focusedTopicId]);
 
   // Loading
   if (authLoading) {
@@ -587,8 +697,6 @@ export function App() {
     );
   }
 
-  const activeTopics = topics.filter((t) => !t.archived);
-
   // Render side panel content based on active view
   const renderSidePanel = () => {
     if (activeView === 'archive') {
@@ -601,15 +709,34 @@ export function App() {
       );
     }
     // Default: topics view
+    const focusTopic = focusedTopicId ? topics.find((t) => t.id === focusedTopicId) : null;
     return (
-      <TopicTree
-        topics={activeTopics}
+      <>
+        {focusTopic && (
+          <div className="focus-banner">
+            <span>Focused on: <strong>{focusTopic.name}</strong></span>
+            <button onClick={() => setFocusedTopicId(null)}>Show all</button>
+          </div>
+        )}
+        <TopicTree
+          topics={displayTopics}
         activeTopicId={activeTopicId}
         onSelectTopic={handleSelectTopic}
         onCreateTopic={handleCreateTopic}
         onArchiveTopic={handleArchiveTopic}
+        onFocusTopic={(id) => setFocusedTopicId(id)}
+        onCreateChildTopic={(parentId) => {
+          const name = prompt('Child topic name:');
+          if (!name) return;
+          createTopic(name, parentId).then((topic) => {
+            fetchTopics().then(setTopics);
+            handleSelectTopic(topic.id);
+          });
+        }}
+        focusedTopicId={focusedTopicId}
         userRole={authUser.role}
       />
+      </>
     );
   };
 
@@ -685,6 +812,25 @@ export function App() {
             ))}
           </ul>
         </div>
+        {presence.length > 0 && (
+          <div className="presence-panel">
+            <h3>Online now</h3>
+            <ul className="presence-list">
+              {presence.map((p) => (
+                <li key={p.sessionId}>
+                  <span className={`presence-dot ${p.state === 'idle' ? 'idle' : ''}`} />
+                  <span className="presence-name">{p.displayName}</span>
+                  <span className="presence-role">{p.role} · {p.state}</span>
+                  <span className="presence-topic">
+                    {p.activeTopicId
+                      ? `#${p.activeTopicId} ${topics.find((t) => t.id === p.activeTopicId)?.name || ''}`
+                      : '—'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="user-section">
           <span className="user-handle">{authUser.handle}</span>
           <span className="user-role">{authUser.role}</span>

@@ -24,6 +24,8 @@ export type { ServerContext, ClientState } from './context.js';
 export interface StartServerOptions {
   host?: string;
   insecure?: boolean;
+  idleThresholdMs?: number;
+  idleCheckIntervalMs?: number;
 }
 
 export function startServer(
@@ -33,6 +35,8 @@ export function startServer(
 ): { server: http.Server; close: () => void } {
   const bindHost = options.host || '127.0.0.1';
   const insecure = options.insecure || false;
+  const idleThresholdMs = options.idleThresholdMs ?? 90_000;
+  const idleCheckIntervalMs = options.idleCheckIntervalMs ?? 15_000;
   const config = loadConfig(configPath);
   const teepeeDir = path.dirname(path.resolve(configPath));
   const basePath = path.dirname(teepeeDir);
@@ -90,9 +94,29 @@ export function startServer(
 
   const orchestrator = new Orchestrator(db, config, basePath, callbacks, { insecure });
 
+  function getPresenceSnapshotFn() {
+    const now = Date.now();
+    const entries: Array<{
+      sessionId: string; displayName: string; role: string;
+      activeTopicId: number | null; state: 'active' | 'idle'; lastSeenAt: string;
+    }> = [];
+    for (const c of clients) {
+      entries.push({
+        sessionId: c.sessionId,
+        displayName: c.user.handle || c.user.email,
+        role: c.user.role,
+        activeTopicId: c.activeTopicId,
+        state: (now - c.lastSeenAt) > idleThresholdMs ? 'idle' : 'active',
+        lastSeenAt: new Date(c.lastSeenAt).toISOString(),
+      });
+    }
+    return entries;
+  }
+
   const ctx: ServerContext = {
     config, db, basePath, port, ownerEmail, ownerSecret, orchestrator, clients, broadcast, broadcastGlobal,
     insecure, bindHost,
+    getPresenceSnapshot: getPresenceSnapshotFn,
   };
 
   // ── HTTP ──
@@ -126,6 +150,24 @@ export function startServer(
   const server = http.createServer(httpHandler);
   const wss = setupWebSocket(server, ctx);
 
+  // Periodically check for idle transitions and broadcast presence changes
+  const idleCheckInterval = setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+    for (const c of clients) {
+      const wasIdle = c.lastBroadcastPresenceState === 'idle';
+      const isIdle = (now - c.lastSeenAt) > idleThresholdMs;
+      if (wasIdle !== isIdle) {
+        changed = true;
+        c.lastBroadcastPresenceState = isIdle ? 'idle' : 'active';
+      }
+    }
+    if (changed) {
+      const snapshot = ctx.getPresenceSnapshot();
+      ctx.broadcastGlobal({ type: 'presence.changed', presence: snapshot });
+    }
+  }, idleCheckIntervalMs);
+
   const isLoopback = bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
 
   server.listen(port, bindHost, () => {
@@ -155,6 +197,6 @@ export function startServer(
 
   return {
     server,
-    close: () => { wss.close(); server.close(); db.close(); },
+    close: () => { clearInterval(idleCheckInterval); wss.close(); server.close(); db.close(); },
   };
 }

@@ -1,6 +1,7 @@
 {
   "name": "@teepee/web",
-  "version": "0.2.10",
+  "version": "0.2.12",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +16,7 @@
     "react-markdown": "^9.0.0",
     "rehype-highlight": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "teepee-core": "^0.2.10"
+    "teepee-core": "^0.2.12"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.0.0",

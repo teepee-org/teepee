@@ -54,6 +54,20 @@ export interface TopicsChangedEvent {
   type: 'topics.changed';
 }
 
+export interface PresenceChangedEvent {
+  type: 'presence.changed';
+  presence: PresenceEntry[];
+}
+
+export interface PresenceEntry {
+  sessionId: string;
+  displayName: string;
+  role: string;
+  activeTopicId: number | null;
+  state: 'active' | 'idle';
+  lastSeenAt: string;
+}
+
 export interface ErrorEvent {
   type: 'error';
   message: string;
@@ -68,6 +82,7 @@ export type ServerEvent =
   | AgentJobFailedEvent
   | SystemEvent
   | TopicsChangedEvent
+  | PresenceChangedEvent
   | ErrorEvent;
 
 // ── Client → Server events ──
@@ -95,8 +110,19 @@ export interface CommandEvent {
   [key: string]: any;
 }
 
+export interface PresenceActiveTopicEvent {
+  type: 'presence.active_topic';
+  topicId: number | null;
+}
+
+export interface PresenceHeartbeatEvent {
+  type: 'presence.heartbeat';
+}
+
 export type ClientEvent =
   | TopicJoinEvent
   | TopicLeaveEvent
   | MessageSendEvent
-  | CommandEvent;
+  | CommandEvent
+  | PresenceActiveTopicEvent
+  | PresenceHeartbeatEvent;

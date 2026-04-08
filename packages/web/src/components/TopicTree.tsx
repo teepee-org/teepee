@@ -9,6 +9,9 @@ interface Props {
   onSelectTopic: (id: number) => void;
   onCreateTopic: () => void;
   onArchiveTopic: (topicId: number) => void;
+  onFocusTopic?: (topicId: number) => void;
+  onCreateChildTopic?: (parentTopicId: number) => void;
+  focusedTopicId?: number | null;
   userRole: string;
 }
 
@@ -19,7 +22,8 @@ interface ContextState {
 }
 
 export function TopicTree({
-  topics, activeTopicId, onSelectTopic, onCreateTopic, onArchiveTopic, userRole,
+  topics, activeTopicId, onSelectTopic, onCreateTopic, onArchiveTopic,
+  onFocusTopic, onCreateChildTopic, focusedTopicId, userRole,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextState | null>(null);
   const [focusIndex, setFocusIndex] = useState<number>(-1);
@@ -34,6 +38,17 @@ export function TopicTree({
   const depthMap = useMemo(() => {
     const map = new Map<number, number>();
     const idIndex = new Map(topics.map((t) => [t.id, t]));
+    // When focused, compute depth relative to the focused topic
+    const baseDepth = (() => {
+      if (!focusedTopicId) return 0;
+      let depth = 0;
+      let cur = idIndex.get(focusedTopicId);
+      while (cur?.parent_topic_id != null) {
+        depth++;
+        cur = idIndex.get(cur.parent_topic_id);
+      }
+      return depth;
+    })();
     for (const t of topics) {
       let depth = 0;
       let cur = t;
@@ -43,10 +58,10 @@ export function TopicTree({
         if (!parent) break;
         cur = parent;
       }
-      map.set(t.id, depth);
+      map.set(t.id, depth - baseDepth);
     }
     return map;
-  }, [topics]);
+  }, [topics, focusedTopicId]);
 
   // Arrow key navigation
   useEffect(() => {
@@ -106,21 +121,27 @@ export function TopicTree({
     <div className="topic-list" ref={treeRef} tabIndex={0}>
       <div className="topic-list-header">
         <h2>Topics</h2>
-        <div className="topic-list-actions">
-          <button onClick={onCreateTopic} title="New topic">+</button>
-        </div>
+        {canEdit && (
+          <div className="topic-list-actions">
+            <button onClick={onCreateTopic} title="New topic">+</button>
+          </div>
+        )}
       </div>
       {topics.length === 0 ? (
         <div className="tree-empty-state">
           <p>No topics yet</p>
-          <button className="tree-empty-action" onClick={onCreateTopic}>Create your first topic</button>
+          {canEdit && <button className="tree-empty-action" onClick={onCreateTopic}>Create your first topic</button>}
         </div>
       ) : (
         <ul>
           {topics.map((topic, i) => {
             const menuItems: MenuItem[] = canEdit
-              ? [{ label: 'Archive', action: () => onArchiveTopic(topic.id) }]
-              : [];
+              ? [
+                  ...(onCreateChildTopic ? [{ label: 'New child topic', action: () => onCreateChildTopic(topic.id) }] : []),
+                  ...(onFocusTopic ? [{ label: 'Focus subtree', action: () => onFocusTopic(topic.id) }] : []),
+                  { label: 'Archive', action: () => onArchiveTopic(topic.id) },
+                ]
+              : [...(onFocusTopic ? [{ label: 'Focus subtree', action: () => onFocusTopic(topic.id) }] : [])];
 
             return (
               <li
@@ -129,8 +150,8 @@ export function TopicTree({
                 data-nav-index={i}
                 style={{ paddingLeft: `${16 + (depthMap.get(topic.id) || 0) * 12}px` }}
                 onClick={() => onSelectTopic(topic.id)}
-                onContextMenu={canEdit ? (e) => showContext(e, menuItems) : undefined}
-                onTouchStart={canEdit ? startLongPress(menuItems) : undefined}
+                onContextMenu={menuItems.length > 0 ? (e) => showContext(e, menuItems) : undefined}
+                onTouchStart={menuItems.length > 0 ? startLongPress(menuItems) : undefined}
                 onTouchEnd={cancelLongPress}
                 onTouchMove={cancelLongPress}
               >

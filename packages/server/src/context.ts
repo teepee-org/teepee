@@ -6,6 +6,10 @@ export interface ClientState {
   ws: WebSocket;
   user: SessionUser;
   subscribedTopics: Set<number>;
+  sessionId: string;
+  activeTopicId: number | null;
+  lastSeenAt: number;
+  lastBroadcastPresenceState: 'active' | 'idle';
 }
 
 export interface ServerContext {
@@ -22,4 +26,12 @@ export interface ServerContext {
   broadcastGlobal: (event: object) => void;
   insecure: boolean;
   bindHost: string;
+  getPresenceSnapshot: () => Array<{
+    sessionId: string;
+    displayName: string;
+    role: string;
+    activeTopicId: number | null;
+    state: 'active' | 'idle';
+    lastSeenAt: string;
+  }>;
 }

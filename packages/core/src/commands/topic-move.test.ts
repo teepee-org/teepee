@@ -284,3 +284,41 @@ describe('migration backfill for sort_order', () => {
     db.close();
   });
 });
+
+describe('createTopic with parentTopicId', () => {
+  it('creates a root topic when parentTopicId is omitted', () => {
+    const { db } = setup();
+    const id = createTopic(db, 'Root');
+    const topic = getTopic(db, id);
+    expect(topic!.parent_topic_id).toBeNull();
+  });
+
+  it('creates a child topic when parentTopicId is given', () => {
+    const { db } = setup();
+    const parentId = createTopic(db, 'Parent');
+    const childId = createTopic(db, 'Child', parentId);
+    const child = getTopic(db, childId);
+    expect(child!.parent_topic_id).toBe(parentId);
+  });
+
+  it('preserves sibling ordering under parent', () => {
+    const { db } = setup();
+    const parentId = createTopic(db, 'Parent');
+    const c1 = createTopic(db, 'First', parentId);
+    const c2 = createTopic(db, 'Second', parentId);
+    const t1 = getTopic(db, c1)!;
+    const t2 = getTopic(db, c2)!;
+    expect(t2.sort_order).toBeGreaterThan(t1.sort_order);
+  });
+
+  it('child topics appear under parent in listTopics', () => {
+    const { db } = setup();
+    const parentId = createTopic(db, 'Parent');
+    createTopic(db, 'Child A', parentId);
+    createTopic(db, 'Child B', parentId);
+    const topics = listTopics(db);
+    const names = topics.map((t) => t.name);
+    expect(names.indexOf('Child A')).toBeGreaterThan(names.indexOf('Parent'));
+    expect(names.indexOf('Child B')).toBeGreaterThan(names.indexOf('Parent'));
+  });
+});

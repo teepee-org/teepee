@@ -1,11 +1,12 @@
 {
   "name": "teepee-core",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Core orchestration and storage primitives for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc",

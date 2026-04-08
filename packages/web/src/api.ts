@@ -8,12 +8,32 @@ export async function fetchTopics(): Promise<Topic[]> {
   return res.json();
 }
 
-export async function createTopic(name: string): Promise<Topic> {
+export async function createTopic(name: string, parentTopicId?: number | null): Promise<Topic> {
   const res = await fetch(`${BASE}/topics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, parentTopicId: parentTopicId ?? null }),
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to create topic' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Presence ──
+
+export interface PresenceEntry {
+  sessionId: string;
+  displayName: string;
+  role: string;
+  activeTopicId: number | null;
+  state: 'active' | 'idle';
+  lastSeenAt: string;
+}
+
+export async function fetchPresence(): Promise<PresenceEntry[]> {
+  const res = await fetch(`${BASE}/presence`);
   return res.json();
 }
 

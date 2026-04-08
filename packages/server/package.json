@@ -1,11 +1,12 @@
 {
   "name": "teepee-server",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "HTTP and WebSocket server for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc && node scripts/prepare-web-dist.cjs",
@@ -22,7 +23,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "teepee-core": "^0.2.11",
+    "teepee-core": "^0.2.12",
     "ws": "^8.17.0"
   },
   "devDependencies": {
