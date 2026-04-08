@@ -15,14 +15,20 @@ export function createJob(db: DatabaseType, batchId: number, agentName: string):
 }
 
 export function updateJobStatus(
-  db: DatabaseType, jobId: number, status: string, extra?: { output_message_id?: number; error?: string }
+  db: DatabaseType, jobId: number, status: string, extra?: { output_message_id?: number; error?: string; requested_by_email?: string; effective_mode?: string }
 ): void {
   if (status === 'running') {
-    db.prepare("UPDATE jobs SET status = ?, started_at = datetime('now') WHERE id = ?").run(status, jobId);
+    if (extra?.requested_by_email || extra?.effective_mode) {
+      db.prepare(
+        "UPDATE jobs SET status = ?, started_at = datetime('now'), requested_by_email = COALESCE(?, requested_by_email), effective_mode = COALESCE(?, effective_mode) WHERE id = ?"
+      ).run(status, extra.requested_by_email ?? null, extra.effective_mode ?? null, jobId);
+    } else {
+      db.prepare("UPDATE jobs SET status = ?, started_at = datetime('now') WHERE id = ?").run(status, jobId);
+    }
   } else if (status === 'done' || status === 'failed') {
     db.prepare(
-      `UPDATE jobs SET status = ?, completed_at = datetime('now'), output_message_id = COALESCE(?, output_message_id), error = COALESCE(?, error) WHERE id = ?`
-    ).run(status, extra?.output_message_id ?? null, extra?.error ?? null, jobId);
+      `UPDATE jobs SET status = ?, completed_at = datetime('now'), output_message_id = COALESCE(?, output_message_id), error = COALESCE(?, error), requested_by_email = COALESCE(?, requested_by_email), effective_mode = COALESCE(?, effective_mode) WHERE id = ?`
+    ).run(status, extra?.output_message_id ?? null, extra?.error ?? null, extra?.requested_by_email ?? null, extra?.effective_mode ?? null, jobId);
   } else {
     db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run(status, jobId);
   }

@@ -89,6 +89,22 @@ describe('runAgent', () => {
     process.env.PATH = originalPath;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  it('preserves quoted arguments when parsing provider commands', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-command-parse-test-'));
+
+    const result = await runAgent(
+      'node -e "console.log(process.argv.slice(1).join(\'|\'))" "foo bar" baz',
+      'context',
+      5000,
+      tmpDir
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe('foo bar|baz');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe('buildContext', () => {
@@ -127,6 +143,10 @@ describe('buildContext', () => {
         max_jobs_per_user_per_minute: 10,
         max_chain_depth: 2,
         max_total_jobs_per_chain: 10,
+      },
+      security: {
+        role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
+        sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
       },
     };
 
@@ -187,6 +207,10 @@ describe('buildContext', () => {
         max_jobs_per_user_per_minute: 10,
         max_chain_depth: 2,
         max_total_jobs_per_chain: 10,
+      },
+      security: {
+        role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
+        sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
       },
     };
 

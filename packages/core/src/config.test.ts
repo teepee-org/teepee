@@ -210,6 +210,152 @@ providers:
 `);
     expect(() => loadConfig(file)).toThrow('at least one agent');
   });
+
+  it('rejects invalid security.role_defaults value', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  role_defaults:
+    user: sandbx
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("must be one of: host, sandbox, disabled (got 'sandbx')");
+  });
+
+  it('rejects invalid agent capability', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+    capability: full_access
+`);
+    expect(() => loadConfig(file)).toThrow("invalid capability 'full_access'");
+  });
+
+  it('rejects invalid sandbox runner', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  sandbox:
+    runner: firejail
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("security.sandbox.runner must be one of");
+  });
+
+  it('accepts container as sandbox runner', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  sandbox:
+    runner: container
+    container_image: "teepee/runner:latest"
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.security.sandbox.runner).toBe('container');
+    expect(config.security.sandbox.container_image).toBe('teepee/runner:latest');
+  });
+
+  it('loads provider sandbox config', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  claude:
+    command: "claude -p"
+    sandbox:
+      image: "teepee/claude-runner:latest"
+      command: "claude -p --permission-mode acceptEdits"
+agents:
+  a:
+    provider: claude
+`);
+    const config = loadConfig(file);
+    expect(config.providers.claude.sandbox).toEqual({
+      image: 'teepee/claude-runner:latest',
+      command: 'claude -p --permission-mode acceptEdits',
+    });
+  });
+
+  it('rejects provider sandbox config without image', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  claude:
+    command: "claude -p"
+    sandbox:
+      command: "claude -p"
+agents:
+  a:
+    provider: claude
+`);
+    expect(() => loadConfig(file)).toThrow("sandbox requires a valid 'image'");
+  });
+
+  it('rejects provider sandbox config with non-string command', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  claude:
+    command: "claude -p"
+    sandbox:
+      image: "teepee/claude-runner:latest"
+      command:
+        - claude
+        - -p
+agents:
+  a:
+    provider: claude
+`);
+    expect(() => loadConfig(file)).toThrow("sandbox.command must be a string");
+  });
+
+  it('applies default security config when not specified', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.security.role_defaults.owner).toBe('host');
+    expect(config.security.role_defaults.user).toBe('sandbox');
+    expect(config.security.role_defaults.observer).toBe('disabled');
+    expect(config.security.sandbox.runner).toBe('bubblewrap');
+    expect(config.security.sandbox.empty_home).toBe(true);
+    expect(config.security.sandbox.private_tmp).toBe(true);
+    expect(config.security.sandbox.forward_env).toEqual([]);
+  });
 });
 
 describe('resolveTimeout', () => {
@@ -244,6 +390,10 @@ describe('resolveTimeout', () => {
       cors_allowed_origins: [],
       auth_rate_limit_window_seconds: 60,
       auth_rate_limit_max_requests: 20,
+    },
+    security: {
+      role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
+      sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
     },
   };
 

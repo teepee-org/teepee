@@ -34,4 +34,16 @@ export function runMigrations(db: DatabaseType): void {
   if (!userColNames.has('revoked_at')) {
     db.exec(`ALTER TABLE users ADD COLUMN revoked_at TEXT;`);
   }
+
+  // Jobs table: execution policy metadata
+  const jobCols = db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[];
+  const jobColNames = new Set(jobCols.map((c) => c.name));
+
+  if (!jobColNames.has('requested_by_email')) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN requested_by_email TEXT;`);
+  }
+
+  if (!jobColNames.has('effective_mode')) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN effective_mode TEXT;`);
+  }
 }

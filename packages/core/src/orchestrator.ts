@@ -1,5 +1,5 @@
 import type { Database as DatabaseType } from 'better-sqlite3';
-import type { TeepeeConfig } from './config.js';
+import type { TeepeeConfig, ExecutionMode } from './config.js';
 import { resolveTimeout } from './config.js';
 import {
   insertMessage,
@@ -11,10 +11,15 @@ import {
   logUsage,
   emitEvent,
   getTopic,
+  getUser,
 } from './db.js';
 import { parseMentions, resolveAliases } from './mentions.js';
 import { filterAllowedAgents } from './permissions.js';
 import { buildContext, runAgent } from './executor.js';
+import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
+import type { UserRole } from './commands/types.js';
+import type { SandboxRunner } from './sandbox/runner.js';
+import { detectSandboxAvailability, type SandboxDetectionResult } from './sandbox/detect.js';
 
 export interface OrchestratorCallbacks {
   onJobStarted(topicId: number, jobId: number, agentName: string): void;
@@ -30,6 +35,9 @@ export class Orchestrator {
   private basePath: string;
   private callbacks: OrchestratorCallbacks;
   private knownAgents: Set<string>;
+  private sandboxRunner: SandboxRunner;
+  private sandboxAvailable: boolean;
+  private sandboxBackend: string;
 
   // Track active jobs per agent per topic
   private activeJobs = new Map<string, Promise<void>>();
@@ -45,6 +53,12 @@ export class Orchestrator {
     this.basePath = basePath;
     this.callbacks = callbacks;
     this.knownAgents = new Set(Object.keys(config.agents));
+    const sandbox = detectSandboxAvailability({
+      preferredRunner: config.security.sandbox.runner,
+    });
+    this.sandboxRunner = sandbox.runner;
+    this.sandboxAvailable = sandbox.available;
+    this.sandboxBackend = sandbox.backend;
   }
 
   /**
@@ -128,7 +142,8 @@ export class Orchestrator {
     agents: string[],
     userEmail: string,
     chainRootBatchId: number | null,
-    chainDepth: number
+    chainDepth: number,
+    requesterRole?: UserRole
   ): Promise<void> {
     const batchId = createBatch(
       this.db,
@@ -146,6 +161,9 @@ export class Orchestrator {
       this.callbacks.onSystemMessage(topicId, sysMsg);
       return;
     }
+
+    // Resolve requester role (once per batch, inherited by chains)
+    const role: UserRole = requesterRole ?? this.resolveUserRole(userEmail);
 
     // Create jobs
     const jobIds = agents.map((agent) => ({
@@ -167,11 +185,20 @@ export class Orchestrator {
         language,
         userEmail,
         rootId,
-        chainDepth
+        chainDepth,
+        role
       )
     );
 
     await Promise.all(promises);
+  }
+
+  private resolveUserRole(email: string): UserRole {
+    const user = getUser(this.db, email);
+    if (!user) return 'observer';
+    if (user.role === 'owner') return 'owner';
+    if (user.role === 'observer') return 'observer';
+    return 'user';
   }
 
   private async executeJob(
@@ -182,7 +209,8 @@ export class Orchestrator {
     language: string,
     userEmail: string,
     chainRootBatchId: number,
-    chainDepth: number
+    chainDepth: number,
+    requesterRole: UserRole
   ): Promise<void> {
     // Wait for any active job for this agent in this topic
     const key = `${agentName}:${topicId}`;
@@ -197,7 +225,8 @@ export class Orchestrator {
       language,
       userEmail,
       chainRootBatchId,
-      chainDepth
+      chainDepth,
+      requesterRole
     );
     this.activeJobs.set(key, jobPromise);
 
@@ -218,11 +247,56 @@ export class Orchestrator {
     language: string,
     userEmail: string,
     chainRootBatchId: number,
-    chainDepth: number
+    chainDepth: number,
+    requesterRole: UserRole
   ): Promise<void> {
+    // Resolve execution policy
+    const agentConfig = this.config.agents[agentName];
+    const providerConfig = this.config.providers[agentConfig.provider];
+    const policy = resolveExecutionPolicy(
+      requesterRole,
+      agentConfig.capability,
+      this.config.security
+    );
+
+    // Record execution metadata
+    const effectiveMode: ExecutionMode = policy.mode;
+
+    // Block disabled agents — persist audit metadata even on denial
+    if (effectiveMode === 'disabled') {
+      const error = `Agent '${agentName}' is disabled: ${policy.reason}`;
+      updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, effective_mode: effectiveMode });
+      emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, effective_mode: effectiveMode }));
+      this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+      return;
+    }
+
+    // Validate sandbox availability when required — persist audit metadata on fail-closed
+    if (effectiveMode === 'sandbox') {
+      const sandboxError = validateSandboxAvailability(effectiveMode, this.sandboxAvailable);
+      if (sandboxError) {
+        const error = sandboxError;
+        updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, effective_mode: effectiveMode });
+        emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, effective_mode: effectiveMode }));
+        this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+        return;
+      }
+
+      if (this.sandboxRunner.name === 'container' && !providerConfig.sandbox?.image) {
+        const error = `Sandbox backend 'container' requires provider '${agentConfig.provider}' to define providers.${agentConfig.provider}.sandbox.image`;
+        updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, effective_mode: effectiveMode });
+        emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, effective_mode: effectiveMode }));
+        this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+        return;
+      }
+    }
+
     // Start
-    updateJobStatus(this.db, jobId, 'running');
-    emitEvent(this.db, 'agent.job.started', topicId, JSON.stringify({ job_id: jobId, agent: agentName }));
+    updateJobStatus(this.db, jobId, 'running', { requested_by_email: userEmail, effective_mode: effectiveMode });
+    emitEvent(this.db, 'agent.job.started', topicId, JSON.stringify({
+      job_id: jobId, agent: agentName, requested_by: userEmail, effective_mode: effectiveMode,
+      sandbox_backend: effectiveMode === 'sandbox' ? this.sandboxBackend : undefined,
+    }));
     this.callbacks.onJobStarted(topicId, jobId, agentName);
     logUsage(this.db, userEmail, agentName, jobId);
 
@@ -238,11 +312,32 @@ export class Orchestrator {
     );
 
     // Run
-    const command = this.config.providers[this.config.agents[agentName].provider].command;
+    const command = providerConfig.command;
     const timeoutMs = resolveTimeout(agentName, this.config);
 
-    const result = await runAgent(command, context, timeoutMs, this.basePath, (chunk) => {
-      this.callbacks.onJobStream(topicId, jobId, chunk);
+    // Build sandbox options with provider-specific overrides for container backend
+    const sandboxOptions = effectiveMode === 'sandbox' ? {
+      projectRoot: this.basePath,
+      emptyHome: this.config.security.sandbox.empty_home,
+      privateTmp: this.config.security.sandbox.private_tmp,
+      forwardEnv: this.config.security.sandbox.forward_env,
+      containerImage: this.sandboxRunner.name === 'container' ? providerConfig.sandbox?.image : undefined,
+      containerCommand: this.sandboxRunner.name === 'container'
+        ? (providerConfig.sandbox?.command ?? providerConfig.command)
+        : undefined,
+    } : undefined;
+
+    const result = await runAgent({
+      command,
+      context,
+      timeoutMs,
+      cwd: this.basePath,
+      executionMode: effectiveMode,
+      sandboxRunner: effectiveMode === 'sandbox' ? this.sandboxRunner : undefined,
+      sandboxOptions,
+      onChunk: (chunk) => {
+        this.callbacks.onJobStream(topicId, jobId, chunk);
+      },
     });
 
     if (result.timedOut) {
@@ -289,13 +384,15 @@ export class Orchestrator {
           insertMention(this.db, outputMessageId, agent, true);
         }
 
+        // Chain inherits the original requester's role — never escalates
         await this.executeBatch(
           topicId,
           outputMessageId,
           chainAgents,
           userEmail,
           chainRootBatchId,
-          chainDepth + 1
+          chainDepth + 1,
+          requesterRole
         );
       }
     }

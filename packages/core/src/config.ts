@@ -2,15 +2,45 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
 
+export interface ProviderSandboxConfig {
+  /** Container image that includes the provider CLI. */
+  image: string;
+  /** Command to run inside the container (defaults to provider.command). */
+  command?: string;
+}
+
 export interface ProviderConfig {
   command: string;
   timeout_seconds?: number;
+  /** Sandbox runtime config for container-based execution. */
+  sandbox?: ProviderSandboxConfig;
 }
+
+export type AgentCapability = 'host_allowed' | 'sandbox_only' | 'disabled';
 
 export interface AgentConfig {
   provider: string;
   prompt?: string;
   timeout_seconds?: number;
+  capability?: AgentCapability;
+}
+
+export type ExecutionMode = 'host' | 'sandbox' | 'disabled';
+
+export interface SecurityConfig {
+  role_defaults: {
+    owner: ExecutionMode;
+    user: ExecutionMode;
+    observer: ExecutionMode;
+  };
+  sandbox: {
+    runner: 'bubblewrap' | 'container';
+    empty_home: boolean;
+    private_tmp: boolean;
+    forward_env: string[];
+    /** Container image for macOS/container sandbox backend. */
+    container_image?: string;
+  };
 }
 
 export interface LimitsConfig {
@@ -40,6 +70,7 @@ export interface TeepeeConfig {
   providers: Record<string, ProviderConfig>;
   agents: Record<string, AgentConfig>;
   limits: LimitsConfig;
+  security: SecurityConfig;
 }
 
 const DEFAULT_SERVER = {
@@ -61,6 +92,20 @@ const DEFAULT_LIMITS: LimitsConfig = {
   max_jobs_per_user_per_minute: 10,
   max_chain_depth: 2,
   max_total_jobs_per_chain: 10,
+};
+
+const DEFAULT_SECURITY: SecurityConfig = {
+  role_defaults: {
+    owner: 'host',
+    user: 'sandbox',
+    observer: 'disabled',
+  },
+  sandbox: {
+    runner: 'bubblewrap',
+    empty_home: true,
+    private_tmp: true,
+    forward_env: [],
+  },
 };
 
 export function loadConfig(configPath: string): TeepeeConfig {
@@ -102,6 +147,7 @@ export function loadConfig(configPath: string): TeepeeConfig {
     providers: {},
     agents: {},
     limits: { ...DEFAULT_LIMITS, ...parsed.limits },
+    security: buildSecurityConfig(parsed.security),
   };
 
   // Validate providers
@@ -114,10 +160,23 @@ export function loadConfig(configPath: string): TeepeeConfig {
     if (!p.command) {
       throw new Error(`Config: provider '${name}' missing 'command'`);
     }
-    config.providers[name] = {
+    const providerEntry: ProviderConfig = {
       command: p.command,
       timeout_seconds: p.timeout_seconds,
     };
+    if (p.sandbox) {
+      if (!p.sandbox.image || typeof p.sandbox.image !== 'string') {
+        throw new Error(`Config: provider '${name}' sandbox requires a valid 'image'`);
+      }
+      if (p.sandbox.command !== undefined && typeof p.sandbox.command !== 'string') {
+        throw new Error(`Config: provider '${name}' sandbox.command must be a string`);
+      }
+      providerEntry.sandbox = {
+        image: p.sandbox.image,
+        command: p.sandbox.command,
+      };
+    }
+    config.providers[name] = providerEntry;
   }
 
   // Validate agents
@@ -141,10 +200,18 @@ export function loadConfig(configPath: string): TeepeeConfig {
     }
     agentNames.add(name);
 
+    const capability = a.capability ?? 'host_allowed';
+    if (!['host_allowed', 'sandbox_only', 'disabled'].includes(capability)) {
+      throw new Error(
+        `Config: agent '${name}' has invalid capability '${capability}'`
+      );
+    }
+
     config.agents[name] = {
       provider: a.provider,
       prompt: a.prompt,
       timeout_seconds: a.timeout_seconds,
+      capability: capability as AgentCapability,
     };
   }
 
@@ -195,6 +262,61 @@ export function resolveTimeout(
   const provider = config.providers[agent?.provider];
   if (provider?.timeout_seconds) return provider.timeout_seconds * 1000;
   return 120_000;
+}
+
+const VALID_EXECUTION_MODES = new Set<string>(['host', 'sandbox', 'disabled']);
+const VALID_CAPABILITIES = new Set<string>(['host_allowed', 'sandbox_only', 'disabled']);
+const VALID_SANDBOX_RUNNERS = new Set<string>(['bubblewrap', 'container']);
+
+function validateExecutionMode(value: unknown, path: string): ExecutionMode {
+  if (typeof value !== 'string' || !VALID_EXECUTION_MODES.has(value)) {
+    throw new Error(`Config: ${path} must be one of: host, sandbox, disabled (got '${value}')`);
+  }
+  return value as ExecutionMode;
+}
+
+function buildSecurityConfig(raw: any): SecurityConfig {
+  if (!raw) return { ...DEFAULT_SECURITY };
+
+  const roleDefaults = { ...DEFAULT_SECURITY.role_defaults };
+  if (raw.role_defaults) {
+    for (const role of ['owner', 'user', 'observer'] as const) {
+      if (raw.role_defaults[role] !== undefined) {
+        roleDefaults[role] = validateExecutionMode(
+          raw.role_defaults[role],
+          `security.role_defaults.${role}`
+        );
+      }
+    }
+  }
+
+  const sandbox = { ...DEFAULT_SECURITY.sandbox };
+  if (raw.sandbox) {
+    if (raw.sandbox.runner !== undefined) {
+      if (!VALID_SANDBOX_RUNNERS.has(raw.sandbox.runner)) {
+        throw new Error(
+          `Config: security.sandbox.runner must be one of: ${[...VALID_SANDBOX_RUNNERS].join(', ')} (got '${raw.sandbox.runner}')`
+        );
+      }
+      sandbox.runner = raw.sandbox.runner;
+    }
+    if (raw.sandbox.empty_home !== undefined) sandbox.empty_home = !!raw.sandbox.empty_home;
+    if (raw.sandbox.private_tmp !== undefined) sandbox.private_tmp = !!raw.sandbox.private_tmp;
+    if (raw.sandbox.forward_env !== undefined) {
+      if (!Array.isArray(raw.sandbox.forward_env)) {
+        throw new Error('Config: security.sandbox.forward_env must be an array');
+      }
+      sandbox.forward_env = raw.sandbox.forward_env;
+    }
+    if (raw.sandbox.container_image !== undefined) {
+      if (typeof raw.sandbox.container_image !== 'string') {
+        throw new Error('Config: security.sandbox.container_image must be a string');
+      }
+      sandbox.container_image = raw.sandbox.container_image;
+    }
+  }
+
+  return { role_defaults: roleDefaults, sandbox };
 }
 
 function normalizeOrigins(value: unknown): string[] {

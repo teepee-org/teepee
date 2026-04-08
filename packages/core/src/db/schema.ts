@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL DEFAULT 'queued',
     output_message_id INTEGER REFERENCES messages(id),
     error TEXT,
+    requested_by_email TEXT,
+    effective_mode TEXT,
     started_at TEXT,
     completed_at TEXT
 );

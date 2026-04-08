@@ -1,9 +1,11 @@
 import { spawn } from 'child_process';
-import type { TeepeeConfig } from './config.js';
+import type { TeepeeConfig, ExecutionMode } from './config.js';
 import { resolvePrompt, resolveTimeout } from './config.js';
 import { getRecentMessages } from './db.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
+import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
+import { prepareCommandParts, isCodexExecCommand } from './command.js';
 
 export interface JobResult {
   output: string;
@@ -71,24 +73,55 @@ export function buildContext(
   return lines.join('\n');
 }
 
+export interface RunAgentOptions {
+  command: string;
+  context: string;
+  timeoutMs: number;
+  cwd: string;
+  executionMode?: ExecutionMode;
+  sandboxRunner?: SandboxRunner;
+  sandboxOptions?: SandboxOptions;
+  onChunk?: (chunk: string) => void;
+}
+
 /**
  * Run an agent command, piping context to stdin and streaming stdout.
+ * Supports both host and sandboxed execution modes.
  */
 export function runAgent(
-  command: string,
-  context: string,
-  timeoutMs: number,
-  cwd: string,
+  commandOrOpts: string | RunAgentOptions,
+  context?: string,
+  timeoutMs?: number,
+  cwd?: string,
   onChunk?: (chunk: string) => void
 ): Promise<JobResult> {
+  // Support both old positional API and new options API
+  const opts: RunAgentOptions =
+    typeof commandOrOpts === 'string'
+      ? { command: commandOrOpts, context: context!, timeoutMs: timeoutMs!, cwd: cwd!, onChunk }
+      : commandOrOpts;
+
   return new Promise((resolve) => {
-    const parts = prepareCommandParts(command);
+    const parts = prepareCommandParts(opts.command);
     const isCodexExecJson = isCodexExecCommand(parts);
-    const proc = spawn(parts[0], parts.slice(1), {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
-      cwd,
-    });
+
+    // Runtime guard: only 'host' and 'sandbox' are runnable modes.
+    // Any unknown or 'disabled' mode must not reach here, but if it does, fail closed.
+    if (opts.executionMode && opts.executionMode !== 'host' && opts.executionMode !== 'sandbox') {
+      resolve({ output: `Blocked: unknown execution mode '${opts.executionMode}'`, exitCode: 1, timedOut: false });
+      return;
+    }
+
+    let proc;
+    if (opts.executionMode === 'sandbox' && opts.sandboxRunner && opts.sandboxOptions) {
+      proc = opts.sandboxRunner.spawn(parts[0], parts.slice(1), opts.sandboxOptions);
+    } else {
+      proc = spawn(parts[0], parts.slice(1), {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env },
+        cwd: opts.cwd,
+      });
+    }
 
     let output = '';
     let timedOut = false;
@@ -96,21 +129,21 @@ export function runAgent(
     const timer = setTimeout(() => {
       timedOut = true;
       proc.kill('SIGKILL');
-    }, timeoutMs);
+    }, opts.timeoutMs);
 
-    proc.stdout.on('data', (data: Buffer) => {
+    proc.stdout!.on('data', (data: Buffer) => {
       const chunk = data.toString();
       output += chunk;
       if (!isCodexExecJson) {
-        onChunk?.(chunk);
+        opts.onChunk?.(chunk);
       }
     });
 
-    proc.stderr.on('data', () => {
+    proc.stderr!.on('data', () => {
       // Discard stderr
     });
 
-    proc.stdin.on('error', () => {
+    proc.stdin!.on('error', () => {
       // Some provider wrappers exit before reading stdin; ignore broken pipe errors.
     });
 
@@ -134,24 +167,12 @@ export function runAgent(
     });
 
     try {
-      proc.stdin.write(context);
-      proc.stdin.end();
+      proc.stdin!.write(opts.context);
+      proc.stdin!.end();
     } catch {
       // The process may have already exited.
     }
   });
-}
-
-function prepareCommandParts(command: string): string[] {
-  const parts = command.split(/\s+/).filter(Boolean);
-  if (isCodexExecCommand(parts) && !parts.includes('--json')) {
-    return [...parts, '--json'];
-  }
-  return parts;
-}
-
-function isCodexExecCommand(parts: string[]): boolean {
-  return parts[0] === 'codex' && parts[1] === 'exec';
 }
 
 function extractCodexFinalMessage(output: string): string {

@@ -37,7 +37,7 @@ Teepee is for the moment when "open a few terminals and coordinate agents by han
 - Let agents delegate work to each other in public, auditable conversation
 - Mix providers like Claude, Codex, and local models in one project
 - Keep everything self-hosted and close to the codebase
-- Let coding agents operate in the real project working directory instead of only replying in chat
+- Let coding agents operate on the real project (sandboxed for non-owners, full access for owners)
 
 ## Quick start
 
@@ -304,7 +304,58 @@ You must answer in <language>.
 <triggering message>
 ```
 
-Provider commands run in the Teepee project working directory. If your provider CLI supports editing files and running shell commands, agents can modify the codebase directly.
+Provider commands run according to the **execution policy**:
+
+- **Owner** runs default to **host** mode — the agent executes directly in the project directory with full host access.
+- **Non-owner** (user) runs default to **sandbox** mode — the agent is confined to the project directory only.
+- **Observer** accounts cannot trigger agents at all.
+- Agents may declare a `capability`:
+  - `host_allowed` (default) — follows the requester's role policy.
+  - `sandbox_only` — always sandboxed, even for owner.
+  - `disabled` — agent cannot be run by anyone.
+- Chained agent calls inherit the original requester's policy. A non-owner cannot escalate by asking one agent to trigger another.
+
+**Sandbox backends:**
+
+- **Linux**: [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`). Install with `apt install bubblewrap`.
+- **macOS / cross-platform**: Docker-compatible container runtime (`docker` or `podman`).
+- If the required sandbox backend is not available and a non-owner run requires sandboxing, the run **fails closed** with a clear error — it does not silently fall back to host mode.
+
+Sandboxed runs mount only the project root at `/workspace`, with a private `/tmp` and empty `/home/agent`. Parent directories and the real host home are not mounted. Environment variables are not inherited — only an explicit allowlist is forwarded.
+
+**Configuration example:**
+
+```yaml
+security:
+  role_defaults:
+    owner: host
+    user: sandbox
+    observer: disabled
+  sandbox:
+    runner: bubblewrap        # or 'container' for macOS
+    empty_home: true
+    private_tmp: true
+    forward_env: []           # explicit env var allowlist
+
+providers:
+  claude:
+    command: "claude -p --permission-mode acceptEdits"
+    sandbox:                          # provider-specific container runtime
+      image: "teepee/claude-runner:latest"  # must include the provider CLI
+      command: "claude -p --permission-mode acceptEdits"
+
+agents:
+  coder:
+    provider: claude
+    capability: host_allowed
+  reviewer:
+    provider: claude
+    capability: sandbox_only
+```
+
+When sandbox mode uses the **container** backend, the provider must define `providers.<name>.sandbox.image`. Teepee does not fall back to a generic image or silently reuse host-only runtime assumptions. If the configured sandbox runner is unavailable, or the selected provider has no container runtime definition, the run fails closed.
+
+All security config is optional — safe defaults apply when not specified.
 
 ## License
 

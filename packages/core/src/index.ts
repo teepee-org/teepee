@@ -5,5 +5,7 @@ export * from './mentions.js';
 export * from './permissions.js';
 export * from './executor.js';
 export * from './orchestrator.js';
+export * from './execution-policy.js';
+export * from './sandbox/index.js';
 export * from './commands/index.js';
 export * from './protocol/index.js';
