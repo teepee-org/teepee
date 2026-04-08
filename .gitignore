@@ -6,4 +6,5 @@ dist/
 *.db
 .DS_Store
 .codex
+PLAN-*.md
 packages/web/src/**/*.js
