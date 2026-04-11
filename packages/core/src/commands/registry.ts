@@ -34,7 +34,7 @@ export function listCommands(): CommandDef[] {
   return [...commands.values()];
 }
 
-const ROLE_LEVEL: Record<UserRole, number> = { observer: 0, user: 1, owner: 2 };
+const ROLE_LEVEL: Record<UserRole, number> = { observer: 0, collaborator: 1, owner: 2 };
 
 function hasMinRole(userRole: string, minRole: UserRole): boolean {
   return (ROLE_LEVEL[userRole as UserRole] ?? 0) >= ROLE_LEVEL[minRole];

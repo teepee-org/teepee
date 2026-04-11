@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Agent } from '../types';
 import type { CommandDef } from '../buildHelpMarkdown';
+import { suggestReferences, type ReferenceSuggestItem } from '../api';
 
-type AutocompleteMode = 'agent' | 'command' | null;
+type AutocompleteMode = 'agent' | 'command' | 'reference' | null;
 
 // Module-level history map — survives component unmount/remount (Admin view, no active topic)
 const historyMap = new Map<number, string[]>();
@@ -69,7 +70,10 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     c.command.toLowerCase().startsWith('/' + autocompleteFilter.toLowerCase())
   );
 
-  const acItems = acMode === 'agent' ? filteredAgents.length : acMode === 'command' ? filteredCommands.length : 0;
+  const [refSuggestions, setRefSuggestions] = useState<ReferenceSuggestItem[]>([]);
+  const refDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const acItems = acMode === 'agent' ? filteredAgents.length : acMode === 'command' ? filteredCommands.length : acMode === 'reference' ? refSuggestions.length : 0;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -91,6 +95,8 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
             insertMention(filteredAgents[selectedIdx].name);
           } else if (acMode === 'command' && filteredCommands[selectedIdx]) {
             insertCommand(filteredCommands[selectedIdx].command);
+          } else if (acMode === 'reference' && refSuggestions[selectedIdx]) {
+            insertReference(refSuggestions[selectedIdx]);
           }
           return;
         }
@@ -98,6 +104,11 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
           if (acMode === 'agent' && filteredAgents[selectedIdx]) {
             e.preventDefault();
             insertMention(filteredAgents[selectedIdx].name);
+            return;
+          }
+          if (acMode === 'reference' && refSuggestions[selectedIdx]) {
+            e.preventDefault();
+            insertReference(refSuggestions[selectedIdx]);
             return;
           }
           // For commands, Enter sends the text (don't intercept)
@@ -156,7 +167,7 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
         }
       }
     },
-    [acMode, acItems, filteredAgents, filteredCommands, selectedIdx, text, disabled, onSend, historyIndex, historyDraft, topicId]
+    [acMode, acItems, filteredAgents, filteredCommands, refSuggestions, selectedIdx, text, disabled, onSend, historyIndex, historyDraft, topicId]
   );
 
   const insertMention = (name: string) => {
@@ -196,6 +207,29 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     }, 0);
   };
 
+  const insertReference = (item: ReferenceSuggestItem) => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+
+    const pos = textarea.selectionStart;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+
+    const bracketIdx = before.lastIndexOf('[[');
+    if (bracketIdx === -1) return;
+
+    const newText = before.slice(0, bracketIdx) + item.insertText + ' ' + after;
+    setText(newText);
+    setAcMode(null);
+    setRefSuggestions([]);
+
+    setTimeout(() => {
+      const newPos = bracketIdx + item.insertText.length + 1;
+      textarea.setSelectionRange(newPos, newPos);
+      textarea.focus();
+    }, 0);
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setText(value);
@@ -216,6 +250,24 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
       setSelectedIdx(0);
       setAcMode('command');
       return;
+    }
+
+    // Check for [[ reference autocomplete trigger
+    const bracketIdx = before.lastIndexOf('[[');
+    if (bracketIdx !== -1 && !before.slice(bracketIdx).includes(']]')) {
+      const partial = before.slice(bracketIdx + 2);
+      if (!partial.includes('\n')) {
+        setAutocompleteFilter(partial);
+        setSelectedIdx(0);
+        setAcMode('reference');
+        if (refDebounceRef.current) clearTimeout(refDebounceRef.current);
+        refDebounceRef.current = setTimeout(() => {
+          suggestReferences(partial, topicId, 15)
+            .then((res) => setRefSuggestions(res.items))
+            .catch(() => setRefSuggestions([]));
+        }, 150);
+        return;
+      }
     }
 
     // Check for @ autocomplete trigger
@@ -275,18 +327,33 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
           ))}
         </div>
       )}
+      {acMode === 'reference' && refSuggestions.length > 0 && (
+        <div className="autocomplete-dropdown" ref={dropdownRef}>
+          {refSuggestions.map((item, i) => (
+            <div
+              key={item.canonicalUri}
+              className={`autocomplete-item ${i === selectedIdx ? 'selected' : ''}`}
+              onClick={() => insertReference(item)}
+            >
+              <span className="autocomplete-ref-icon">{item.type === 'artifact_document' ? '📄' : '📁'}</span>
+              <span className="autocomplete-ref-label">{item.label}</span>
+              <span className="autocomplete-provider">{item.description}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={inputRef}
         value={text}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'Read-only' : 'Type a message... (/help for commands, @ to mention agents)'}
+        placeholder={disabled ? 'Read-only' : 'Type a message... (/help, @agent, [[file)'}
         disabled={disabled}
         rows={3}
       />
       {!disabled && (
         <div className="compose-hint">
-          Type <code>/help</code> for commands. Use <code>@</code> to mention agents.
+          <code>/help</code> commands · <code>@</code> agents · <code>[[</code> files
         </div>
       )}
     </div>

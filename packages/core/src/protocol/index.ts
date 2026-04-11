@@ -5,6 +5,7 @@ export type {
   MessageCreatedEvent,
   MessageStreamEvent,
   AgentJobStartedEvent,
+  AgentJobRetryingEvent,
   AgentJobCompletedEvent,
   AgentJobFailedEvent,
   SystemEvent,
@@ -18,6 +19,8 @@ export type {
   PresenceHeartbeatEvent,
   PresenceEntry,
   TopicsChangedEvent,
+  ArtifactCreatedEvent,
+  ArtifactUpdatedEvent,
 } from './events.js';
 
 export type {
@@ -28,4 +31,7 @@ export type {
   StatusResponse,
   SessionResponse,
   InviteLinkResponse,
+  ArtifactResponse,
+  ArtifactVersionResponse,
+  MessageArtifactResponse,
 } from './api.js';

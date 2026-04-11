@@ -4,35 +4,78 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn as nodeSpawn } from 'child_process';
 import { Orchestrator, type OrchestratorCallbacks } from './orchestrator.js';
-import { openDb, createTopic, insertMessage, createUser, activateUser, setPermission } from './db.js';
+import {
+  openDb,
+  createTopic,
+  insertMessage,
+  createUser,
+  activateUser,
+  createDocumentArtifact,
+  updateDocumentArtifact,
+  getArtifactVersions,
+} from './db.js';
 import { runMigrations } from './db/migrate.js';
 import type { TeepeeConfig } from './config.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
 
-function makeConfig(overrides?: Partial<TeepeeConfig>): TeepeeConfig {
-  return {
+function makeConfig(overrides?: Partial<TeepeeConfig> & { agents?: Record<string, any>; security?: any }): TeepeeConfig {
+  const agents: Record<string, any> = overrides?.agents ?? {
+    coder: { provider: 'echo', capability: 'host_allowed' },
+    reviewer: { provider: 'echo', capability: 'sandbox_only' },
+    disabled_agent: { provider: 'echo', capability: 'disabled' },
+  };
+  const roles = overrides?.roles ?? legacyRolesForTest(agents);
+  const base: TeepeeConfig = {
+    version: 1,
+    mode: 'private',
     teepee: { name: 'test', language: 'en', demo: { enabled: false, topic_name: 'demo', hotkey: 'F1', delay_ms: 1200 } },
     server: { trust_proxy: false, cors_allowed_origins: [], auth_rate_limit_window_seconds: 60, auth_rate_limit_max_requests: 100 },
     providers: { echo: { command: 'echo hello' } },
-    agents: {
-      coder: { provider: 'echo', capability: 'host_allowed' },
-      reviewer: { provider: 'echo', capability: 'sandbox_only' },
-      disabled_agent: { provider: 'echo', capability: 'disabled' },
-    },
+    agents,
+    roles,
     limits: { max_agents_per_message: 5, max_jobs_per_user_per_minute: 100, max_chain_depth: 2, max_total_jobs_per_chain: 10 },
     security: {
-      role_defaults: { owner: 'host', user: 'sandbox', observer: 'disabled' },
       sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] },
     },
-    ...overrides,
   };
+  return {
+    ...base,
+    ...overrides,
+    agents,
+    roles,
+    security: overrides?.security ?? {
+      sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] },
+    },
+  };
+}
+
+function legacyRolesForTest(agents: Record<string, any>): TeepeeConfig['roles'] {
+  const roles: TeepeeConfig['roles'] = { owner: {}, collaborator: {}, observer: {} };
+  for (const [name, agent] of Object.entries(agents)) {
+    if (agent.capability === 'disabled') continue;
+    if (agent.profile === 'trusted') {
+      roles.owner[name] = 'trusted';
+      continue;
+    }
+    if (agent.profile === 'restricted') {
+      roles.owner[name] = 'readonly';
+      roles.collaborator[name] = 'readonly';
+      continue;
+    }
+    roles.owner[name] = 'readwrite';
+    roles.collaborator[name] = 'readwrite';
+  }
+  return roles;
 }
 
 function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][]> } {
   const calls: Record<string, any[][]> = {
     onJobStarted: [],
     onJobStream: [],
+    onJobRetrying: [],
+    onJobWaitingInput: [],
+    onJobResumed: [],
     onJobCompleted: [],
     onJobFailed: [],
     onSystemMessage: [],
@@ -41,6 +84,9 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     calls,
     onJobStarted: (...args: any[]) => { calls.onJobStarted.push(args); },
     onJobStream: (...args: any[]) => { calls.onJobStream.push(args); },
+    onJobRetrying: (...args: any[]) => { calls.onJobRetrying.push(args); },
+    onJobWaitingInput: (...args: any[]) => { calls.onJobWaitingInput.push(args); },
+    onJobResumed: (...args: any[]) => { calls.onJobResumed.push(args); },
     onJobCompleted: (...args: any[]) => { calls.onJobCompleted.push(args); },
     onJobFailed: (...args: any[]) => { calls.onJobFailed.push(args); },
     onSystemMessage: (...args: any[]) => { calls.onSystemMessage.push(args); },
@@ -58,7 +104,7 @@ function setupDb(): { db: DatabaseType; tmpDir: string } {
 function setupUsers(db: DatabaseType) {
   createUser(db, 'owner@test.com', 'owner');
   activateUser(db, 'owner@test.com', 'owner');
-  createUser(db, 'user@test.com', 'user');
+  createUser(db, 'user@test.com', 'collaborator');
   activateUser(db, 'user@test.com', 'normaluser');
   createUser(db, 'observer@test.com', 'observer');
   activateUser(db, 'observer@test.com', 'watcher');
@@ -99,7 +145,7 @@ describe('Orchestrator security', () => {
     setupUsers(db);
   });
 
-  it('disabled agent fails with audit metadata', async () => {
+  it('unmapped agent is denied before job creation', async () => {
     const config = makeConfig();
     const callbacks = makeCallbacks();
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
@@ -107,15 +153,12 @@ describe('Orchestrator security', () => {
     const topicId = createTopic(db, 'test');
     await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@disabled_agent do something');
 
-    expect(callbacks.calls.onJobFailed.length).toBe(1);
-    const [, , , error] = callbacks.calls.onJobFailed[0];
-    expect(error).toContain('disabled');
-
-    // Verify audit metadata persisted on the job
-    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
-    expect(job.status).toBe('failed');
-    expect(job.requested_by_email).toBe('owner@test.com');
-    expect(job.effective_mode).toBe('disabled');
+    expect(callbacks.calls.onJobFailed.length).toBe(0);
+    expect(callbacks.calls.onSystemMessage.length).toBe(1);
+    const [, text] = callbacks.calls.onSystemMessage[0];
+    expect(text).toContain('Permission denied');
+    const jobs = db.prepare('SELECT * FROM jobs').all() as any[];
+    expect(jobs.length).toBe(0);
   });
 
   it('observer is denied at permission level', async () => {
@@ -149,8 +192,27 @@ describe('Orchestrator security', () => {
     expect(job.effective_mode).toBe('sandbox');
   });
 
-  it('owner + host_allowed agent runs in host mode', async () => {
+  it('owner + normal host_allowed agent resolves to sandbox mode', async () => {
     const config = makeConfig();
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    const topicId = createTopic(db, 'test');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder hello');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.requested_by_email).toBe('owner@test.com');
+  });
+
+  it('owner + trusted host_allowed agent runs in host mode', async () => {
+    const config = makeConfig({
+      agents: {
+        coder: { provider: 'echo', capability: 'host_allowed', profile: 'trusted' },
+        reviewer: { provider: 'echo', capability: 'sandbox_only' },
+        disabled_agent: { provider: 'echo', capability: 'disabled' },
+      },
+    });
     const callbacks = makeCallbacks();
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
 
@@ -162,13 +224,10 @@ describe('Orchestrator security', () => {
     expect(job.requested_by_email).toBe('owner@test.com');
   });
 
-  it('user + host_allowed agent resolves to sandbox mode', async () => {
+  it('collaborator + host_allowed agent resolves to sandbox mode', async () => {
     const config = makeConfig();
     const callbacks = makeCallbacks();
     const topicId = createTopic(db, 'test');
-
-    // Grant user permission to tag coder
-    setPermission(db, 'user@test.com', null, '*', true);
 
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
     await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
@@ -179,7 +238,7 @@ describe('Orchestrator security', () => {
     expect(job.requested_by_email).toBe('user@test.com');
   });
 
-  it('disabled agent produces no onJobStarted callback (no spawn)', async () => {
+  it('unmapped agent produces no onJobStarted callback or spawn', async () => {
     const config = makeConfig();
     const callbacks = makeCallbacks();
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
@@ -187,23 +246,20 @@ describe('Orchestrator security', () => {
     const topicId = createTopic(db, 'test');
     await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@disabled_agent test');
 
-    // Should have failed but never started
     expect(callbacks.calls.onJobStarted.length).toBe(0);
-    expect(callbacks.calls.onJobFailed.length).toBe(1);
+    expect(callbacks.calls.onJobFailed.length).toBe(0);
+    expect(callbacks.calls.onSystemMessage.length).toBe(1);
   });
 
   it('sandbox-required + backend unavailable fails closed with audit metadata', async () => {
     // Force sandbox config to 'container' which won't be available in test env
     const config = makeConfig({
       security: {
-        role_defaults: { owner: 'host', user: 'sandbox', observer: 'disabled' },
         sandbox: { runner: 'container', empty_home: true, private_tmp: true, forward_env: [] },
       },
     });
     const callbacks = makeCallbacks();
     const topicId = createTopic(db, 'test');
-
-    setPermission(db, 'user@test.com', null, '*', true);
 
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
     await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
@@ -223,14 +279,11 @@ describe('Orchestrator security', () => {
   it('container backend fails closed when provider sandbox runtime is missing', async () => {
     const config = makeConfig({
       security: {
-        role_defaults: { owner: 'host', user: 'sandbox', observer: 'disabled' },
         sandbox: { runner: 'container', empty_home: true, private_tmp: true, forward_env: [] },
       },
     });
     const callbacks = makeCallbacks();
     const topicId = createTopic(db, 'test');
-
-    setPermission(db, 'user@test.com', null, '*', true);
 
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
     (orch as any).sandboxAvailable = true;
@@ -248,63 +301,64 @@ describe('Orchestrator security', () => {
     expect(callbacks.calls.onJobFailed.length).toBe(1);
   });
 
-  it('insecure mode promotes user sandbox_only agent to host', async () => {
-    const config = makeConfig();
+  it('architect respects explicit trusted profile and can run as host for owner', async () => {
+    const config = makeConfig({
+      agents: {
+        architect: { provider: 'echo', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
     const callbacks = makeCallbacks();
-    const topicId = createTopic(db, 'test');
-
-    setPermission(db, 'user@test.com', null, '*', true);
-
-    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
-
-    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@reviewer review this');
-
-    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
-    expect(job.effective_mode).toBe('host');
-    expect(job.requested_by_email).toBe('user@test.com');
-  });
-
-  it('insecure mode still keeps disabled agents disabled', async () => {
-    const config = makeConfig();
-    const callbacks = makeCallbacks();
-    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
 
     const topicId = createTopic(db, 'test');
-    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@disabled_agent do something');
-
-    expect(callbacks.calls.onJobFailed.length).toBe(1);
-    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
-    expect(job.effective_mode).toBe('disabled');
-  });
-
-  it('insecure mode allows user + host_allowed to run as host', async () => {
-    const config = makeConfig();
-    const callbacks = makeCallbacks();
-    const topicId = createTopic(db, 'test');
-
-    setPermission(db, 'user@test.com', null, '*', true);
-
-    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: true });
-    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@architect review');
 
     const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
     expect(job.effective_mode).toBe('host');
   });
 
-  it('secure mode still fails closed when sandbox required but unavailable', async () => {
+  it('architect with normal profile stays in sandbox', async () => {
+    const config = makeConfig({
+      agents: {
+        architect: { provider: 'echo', capability: 'host_allowed', profile: 'normal' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    const topicId = createTopic(db, 'test');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@architect review');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('sandbox');
+  });
+
+  it('legacy restricted agent resolves to readonly sandbox for collaborator', async () => {
+    const config = makeConfig({
+      agents: {
+        helper: { provider: 'echo', capability: 'host_allowed', profile: 'restricted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@helper help');
+
+    const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.effective_profile).toBe('readonly');
+  });
+
+  it('fails closed when sandbox is required but unavailable', async () => {
     const config = makeConfig({
       security: {
-        role_defaults: { owner: 'host', user: 'sandbox', observer: 'disabled' },
         sandbox: { runner: 'container', empty_home: true, private_tmp: true, forward_env: [] },
       },
     });
     const callbacks = makeCallbacks();
     const topicId = createTopic(db, 'test');
 
-    setPermission(db, 'user@test.com', null, '*', true);
-
-    // Explicitly NOT insecure
-    const orch = new Orchestrator(db, config, tmpDir, callbacks, { insecure: false });
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
     await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@coder hello');
 
     const job = db.prepare('SELECT * FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
@@ -317,8 +371,8 @@ describe('Orchestrator security', () => {
     const coderScript = path.join(tmpDir, 'coder.js');
     const chainedScript = path.join(tmpDir, 'chain-target.js');
 
-    fs.writeFileSync(coderScript, "console.log('@chain_target please continue');\n");
-    fs.writeFileSync(chainedScript, "console.log('done');\n");
+    fs.writeFileSync(coderScript, "setTimeout(() => console.log('@chain_target please continue'), 25);\n");
+    fs.writeFileSync(chainedScript, "setTimeout(() => console.log('done'), 25);\n");
 
     const config = makeConfig({
       providers: {
@@ -326,14 +380,12 @@ describe('Orchestrator security', () => {
         chain_provider: { command: 'node chain-target.js' },
       },
       agents: {
-        coder: { provider: 'coder_provider', capability: 'host_allowed' },
+        coder: { provider: 'coder_provider', capability: 'host_allowed', chain_policy: 'delegate_with_origin_policy' },
         chain_target: { provider: 'chain_provider', capability: 'host_allowed' },
       },
     });
     const callbacks = makeCallbacks();
     const topicId = createTopic(db, 'test');
-
-    setPermission(db, 'user@test.com', null, '*', true);
 
     const orch = new Orchestrator(db, config, tmpDir, callbacks);
     (orch as any).sandboxAvailable = true;
@@ -348,5 +400,502 @@ describe('Orchestrator security', () => {
       { agent_name: 'chain_target', effective_mode: 'sandbox', requested_by_email: 'user@test.com' },
     ]);
     expect(callbacks.calls.onJobCompleted.length).toBe(2);
+  });
+
+  it('agent with chain_policy=none does not trigger chained agents', async () => {
+    const coderScript = path.join(tmpDir, 'coder-no-chain.js');
+    fs.writeFileSync(coderScript, "setTimeout(() => console.log('@chain_target please continue'), 25);\n");
+
+    const config = makeConfig({
+      providers: {
+        coder_provider: { command: 'node coder-no-chain.js' },
+        chain_provider: { command: 'echo done' },
+      },
+      agents: {
+        coder: { provider: 'coder_provider', capability: 'host_allowed', chain_policy: 'none' },
+        chain_target: { provider: 'chain_provider', capability: 'host_allowed' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder start');
+
+    const jobs = db.prepare('SELECT agent_name FROM jobs ORDER BY id').all() as any[];
+    expect(jobs).toEqual([{ agent_name: 'coder' }]);
+    expect(callbacks.calls.onJobCompleted.length).toBe(1);
+  });
+
+  it('architect chain delegation to trusted coder works for owner', async () => {
+    const config = makeConfig({
+      providers: {
+        arch_echo: { command: 'echo @coder do this' },
+        coder_echo: { command: 'echo done' },
+      },
+      agents: {
+        architect: { provider: 'arch_echo', capability: 'host_allowed', profile: 'restricted', chain_policy: 'delegate_with_origin_policy' },
+        coder: { provider: 'coder_echo', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@architect plan');
+
+    const jobs = db.prepare('SELECT agent_name, effective_mode FROM jobs ORDER BY id').all() as any[];
+    expect(jobs.length).toBe(2);
+    expect(jobs[0]).toEqual({ agent_name: 'architect', effective_mode: 'sandbox' });
+    expect(jobs[1]).toEqual({ agent_name: 'coder', effective_mode: 'host' });
+  });
+
+  it('architect chain delegation to trusted coder denied for collaborator', async () => {
+    const config = makeConfig({
+      providers: {
+        arch_echo: { command: 'echo @coder do this' },
+        coder_echo: { command: 'echo done' },
+      },
+      agents: {
+        architect: { provider: 'arch_echo', capability: 'host_allowed', profile: 'restricted', chain_policy: 'delegate_with_origin_policy' },
+        coder: { provider: 'coder_echo', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    await orch.handleMessage(topicId, 'user@test.com', 'normaluser', '@architect plan');
+
+    // architect is readonly for collaborator, but architect output @coder.
+    // coder is trusted for owner only in this legacy test mapping, so collaborator is denied.
+    const jobs = db.prepare('SELECT agent_name, effective_mode FROM jobs ORDER BY id').all() as any[];
+
+    // Only architect job should exist; coder should be denied at chain permission level
+    const architectJob = jobs.find((j: any) => j.agent_name === 'architect');
+    expect(architectJob).toBeTruthy();
+    expect(architectJob.effective_mode).toBe('sandbox');
+
+    // coder should NOT have a job (denied by chain permission filtering)
+    const coderJob = jobs.find((j: any) => j.agent_name === 'coder');
+    expect(coderJob).toBeUndefined();
+
+    // System message about chain denial
+    expect(callbacks.calls.onSystemMessage.length).toBeGreaterThan(0);
+    const sysMsgs = callbacks.calls.onSystemMessage.map((c: any) => c[1]);
+    expect(sysMsgs.some((m: string) => m.includes('Chain delegation denied'))).toBe(true);
+  });
+
+  it('readonly agent uses the sandbox runner with read-only project access', async () => {
+    const config = makeConfig({
+      providers: {
+        internal: { command: 'echo done' },
+      },
+      agents: {
+        helper: { provider: 'internal', capability: 'host_allowed', profile: 'restricted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    const spawnCalls: any[] = [];
+    const mockRunner: SandboxRunner = {
+      name: 'bubblewrap',
+      isAvailable: () => true,
+      spawn(command: string, args: string[], options: SandboxOptions) {
+        spawnCalls.push({ command, args, options });
+        return nodeSpawn(command, args, {
+          cwd: options.projectRoot,
+          env: { ...process.env },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      },
+    };
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = mockRunner;
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@helper help');
+
+    const job = db.prepare('SELECT effective_mode, effective_profile FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.effective_profile).toBe('readonly');
+
+    expect(spawnCalls.length).toBe(1);
+    expect(spawnCalls[0].options.readOnlyProject).toBe(true);
+    expect(callbacks.calls.onJobCompleted.length).toBe(1);
+  });
+
+  it('readonly agent can execute provider CLI inside the read-only sandbox', async () => {
+    const config = makeConfig({
+      agents: {
+        helper: { provider: 'echo', capability: 'host_allowed', profile: 'restricted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const topicId = createTopic(db, 'test');
+
+    const spawnCalls: any[] = [];
+    const mockRunner: SandboxRunner = {
+      name: 'bubblewrap',
+      isAvailable: () => true,
+      spawn(command: string, args: string[], options: SandboxOptions) {
+        spawnCalls.push({ command, args, options });
+        return nodeSpawn(command, args, {
+          cwd: options.projectRoot,
+          env: { ...process.env },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      },
+    };
+
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = mockRunner;
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@helper help');
+
+    const job = db.prepare('SELECT effective_mode, effective_profile, status, error FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.effective_profile).toBe('readonly');
+    expect(job.status).toBe('done');
+    expect(spawnCalls.length).toBe(1);
+    expect(spawnCalls[0].options.readOnlyProject).toBe(true);
+  });
+
+  it('supports lazy artifact reads before updating the current head', async () => {
+    const topicId = createTopic(db, 'test');
+    const { artifact } = createDocumentArtifact(db, {
+      topicId,
+      kind: 'plan',
+      title: 'Plan',
+      body: '# v1',
+    });
+    updateDocumentArtifact(db, {
+      artifactId: artifact.id,
+      baseVersion: 1,
+      body: '# v2',
+    });
+
+    const agentScript = path.join(tmpDir, 'artifact-reader-agent.js');
+    fs.writeFileSync(
+      agentScript,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const input = fs.readFileSync(0, 'utf8');",
+        "const out = process.env.TEEPEE_OUTPUT_DIR;",
+        "if (!input.includes('[artifact-op-results]')) {",
+        "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
+        "    { op_id: 'r1', op: 'read-current', artifact_id: 1 },",
+        "    { op_id: 'r2', op: 'read-version', artifact_id: 1, version: 1 },",
+        "    { op_id: 'r3', op: 'read-diff', artifact_id: 1, from_version: 1, to_version: 'current', format: 'summary' }",
+        "  ] }));",
+        "  console.log('requesting artifact reads');",
+        "} else {",
+        "  const jsonText = input.split('[artifact-op-results]\\n')[1].split('\\n\\n[messages]')[0];",
+        "  const parsed = JSON.parse(jsonText);",
+        "  const current = parsed.results.find((r) => r.op === 'read-current');",
+        "  const previous = parsed.results.find((r) => r.op === 'read-version');",
+        "  fs.writeFileSync(path.join(out, 'files', 'plan.md'), `# v3\\n\\nBase: ${current.version}\\nCurrent: ${current.body}\\nPrevious: ${previous.body}\\n`);",
+        "  fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "    { op: 'update', artifact_id: 1, base_version: 'current', path: 'files/plan.md' }",
+        "  ] }));",
+        "  fs.writeFileSync(path.join(out, 'response.md'), 'Artifact updated after lazy reads.');",
+        "  console.log('done');",
+        "}",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        artifact_provider: { command: 'node artifact-reader-agent.js' },
+      },
+      agents: {
+        coder: { provider: 'artifact_provider', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder aggiorna il documento');
+
+    const versions = getArtifactVersions(db, artifact.id);
+    expect(versions).toHaveLength(3);
+    expect(versions[2].body).toContain('Base: 2');
+    expect(versions[2].body).toContain('Current: # v2');
+    expect(versions[2].body).toContain('Previous: # v1');
+    expect(callbacks.calls.onJobCompleted).toHaveLength(1);
+  });
+
+  it('supports rewrite-from-version after reading both head and source version', async () => {
+    const topicId = createTopic(db, 'test');
+    const { artifact } = createDocumentArtifact(db, {
+      topicId,
+      kind: 'report',
+      title: 'Che cos\'e Teepee',
+      body: '# v1\n\nIntro v1',
+    });
+    updateDocumentArtifact(db, {
+      artifactId: artifact.id,
+      baseVersion: 1,
+      body: '# v2\n\nIntro v2',
+    });
+
+    const agentScript = path.join(tmpDir, 'artifact-rewrite-agent.js');
+    fs.writeFileSync(
+      agentScript,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const input = fs.readFileSync(0, 'utf8');",
+        "const out = process.env.TEEPEE_OUTPUT_DIR;",
+        "if (!input.includes('[artifact-op-results]')) {",
+        "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
+        "    { op_id: 'r1', op: 'read-current', artifact_id: 1 },",
+        "    { op_id: 'r2', op: 'read-version', artifact_id: 1, version: 1 }",
+        "  ] }));",
+        "  console.log('requesting artifact reads');",
+        "} else {",
+        "  const jsonText = input.split('[artifact-op-results]\\n')[1].split('\\n\\n[messages]')[0];",
+        "  const parsed = JSON.parse(jsonText);",
+        "  const current = parsed.results.find((r) => r.op === 'read-current');",
+        "  const source = parsed.results.find((r) => r.op === 'read-version' && r.version === 1);",
+        "  fs.writeFileSync(path.join(out, 'files', 'report.md'), `${source.body}\\n\\n## Sicurezza\\n\\nBase head: ${current.version}\\n`);",
+        "  fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "    { op: 'rewrite-from-version', artifact_id: 1, base_version: 'current', source_version: source.version, path: 'files/report.md' }",
+        "  ] }));",
+        "  fs.writeFileSync(path.join(out, 'response.md'), 'Artifact rewritten from v1.');",
+        "  console.log('done');",
+        "}",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        artifact_provider: { command: 'node artifact-rewrite-agent.js' },
+      },
+      agents: {
+        coder: { provider: 'artifact_provider', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder aggiungi un paragrafo sicurezza alla versione 1');
+
+    const versions = getArtifactVersions(db, artifact.id);
+    expect(versions).toHaveLength(3);
+    expect(versions[2].body).toContain('Intro v1');
+    expect(versions[2].body).not.toContain('Intro v2');
+    expect(versions[2].body).toContain('## Sicurezza');
+    expect(callbacks.calls.onJobCompleted).toHaveLength(1);
+  });
+
+  it('rejects artifact update manifests when the agent did not read the current head', async () => {
+    const topicId = createTopic(db, 'test');
+    const { artifact } = createDocumentArtifact(db, {
+      topicId,
+      kind: 'plan',
+      title: 'Plan',
+      body: '# v1',
+    });
+    updateDocumentArtifact(db, {
+      artifactId: artifact.id,
+      baseVersion: 1,
+      body: '# v2',
+    });
+
+    const agentScript = path.join(tmpDir, 'artifact-blind-agent.js');
+    fs.writeFileSync(
+      agentScript,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const out = process.env.TEEPEE_OUTPUT_DIR;",
+        "fs.writeFileSync(path.join(out, 'files', 'plan.md'), '# blind update');",
+        "fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "  { op: 'update', artifact_id: 1, base_version: 2, path: 'files/plan.md' }",
+        "] }));",
+        "fs.writeFileSync(path.join(out, 'response.md'), 'Blind update attempted.');",
+        "console.log('done');",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        artifact_provider: { command: 'node artifact-blind-agent.js' },
+      },
+      agents: {
+        coder: { provider: 'artifact_provider', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder aggiorna il documento');
+
+    expect(getArtifactVersions(db, artifact.id)).toHaveLength(2);
+    const job = db.prepare('SELECT status, output_message_id, error FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.status).toBe('failed');
+    expect(job.output_message_id).toBeNull();
+    expect(job.error).toContain('requires read-current');
+    const events = db.prepare(`SELECT kind, payload FROM events ORDER BY id`).all() as Array<{ kind: string; payload: string }>;
+    expect(events.some((event) => event.kind === 'agent.job.retrying' && event.payload.includes('requires read-current'))).toBe(true);
+    expect(events.some((event) => event.kind === 'artifact.ingest.error' && event.payload.includes('requires read-current'))).toBe(true);
+    expect(events.some((event) => event.kind === 'agent.job.failed' && event.payload.includes('requires read-current'))).toBe(true);
+    expect(callbacks.calls.onJobRetrying).toHaveLength(1);
+    expect(callbacks.calls.onJobCompleted).toHaveLength(0);
+    expect(callbacks.calls.onJobFailed).toHaveLength(1);
+  });
+
+  it('auto-repairs a recoverable artifact write error once and commits only the final reply', async () => {
+    const topicId = createTopic(db, 'test');
+    const { artifact } = createDocumentArtifact(db, {
+      topicId,
+      kind: 'plan',
+      title: 'Plan',
+      body: '# v1',
+    });
+    updateDocumentArtifact(db, {
+      artifactId: artifact.id,
+      baseVersion: 1,
+      body: '# v2',
+    });
+
+    const agentScript = path.join(tmpDir, 'artifact-auto-repair-agent.js');
+    fs.writeFileSync(
+      agentScript,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const input = fs.readFileSync(0, 'utf8');",
+        "const out = process.env.TEEPEE_OUTPUT_DIR;",
+        "if (!input.includes('[artifact-write-error]')) {",
+        "  fs.writeFileSync(path.join(out, 'files', 'plan.md'), '# blind update');",
+        "  fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "    { op: 'update', artifact_id: 1, base_version: 2, path: 'files/plan.md' }",
+        "  ] }));",
+        "  fs.writeFileSync(path.join(out, 'response.md'), 'First attempt');",
+        "  console.log('first attempt');",
+        "} else if (!input.includes('[artifact-op-results]')) {",
+        "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
+        "    { op_id: 'r1', op: 'read-current', artifact_id: 1 }",
+        "  ] }));",
+        "  console.log('repair requesting read-current');",
+        "} else {",
+        "  const jsonText = input.split('[artifact-op-results]\\n')[1].split('\\n\\n[artifact-write-error]')[0];",
+        "  const parsed = JSON.parse(jsonText);",
+        "  const current = parsed.results.find((r) => r.op === 'read-current');",
+        "  fs.writeFileSync(path.join(out, 'files', 'plan.md'), `# repaired\\n\\nBase: ${current.version}`);",
+        "  fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "    { op: 'update', artifact_id: 1, base_version: 'current', path: 'files/plan.md' }",
+        "  ] }));",
+        "  fs.writeFileSync(path.join(out, 'response.md'), 'Second attempt repaired');",
+        "  console.log('second attempt');",
+        "}",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        artifact_provider: { command: 'node artifact-auto-repair-agent.js' },
+      },
+      agents: {
+        coder: { provider: 'artifact_provider', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder aggiorna il documento');
+
+    const versions = getArtifactVersions(db, artifact.id);
+    expect(versions).toHaveLength(3);
+    expect(versions[2].body).toContain('Base: 2');
+    const job = db.prepare('SELECT status, output_message_id, error FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.status).toBe('done');
+    expect(job.error).toBeNull();
+    expect(job.output_message_id).toBeTruthy();
+    const agentMessages = db.prepare("SELECT body FROM messages WHERE topic_id = ? AND author_type = 'agent' ORDER BY id").all(topicId) as Array<{ body: string }>;
+    expect(agentMessages).toHaveLength(1);
+    expect(agentMessages[0].body).toBe('Second attempt repaired');
+    const events = db.prepare(`SELECT kind, payload FROM events ORDER BY id`).all() as Array<{ kind: string; payload: string }>;
+    expect(events.some((event) => event.kind === 'agent.job.retrying')).toBe(true);
+    expect(events.some((event) => event.kind === 'agent.job.failed')).toBe(false);
+    expect(callbacks.calls.onJobRetrying).toHaveLength(1);
+    expect(callbacks.calls.onJobCompleted).toHaveLength(1);
+  });
+
+  it('fails after a single auto-repair attempt without leaving a ghost agent message', async () => {
+    const topicId = createTopic(db, 'test');
+    const { artifact } = createDocumentArtifact(db, {
+      topicId,
+      kind: 'plan',
+      title: 'Plan',
+      body: '# v1',
+    });
+    updateDocumentArtifact(db, {
+      artifactId: artifact.id,
+      baseVersion: 1,
+      body: '# v2',
+    });
+
+    const agentScript = path.join(tmpDir, 'artifact-auto-repair-fail-agent.js');
+    fs.writeFileSync(
+      agentScript,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const input = fs.readFileSync(0, 'utf8');",
+        "const out = process.env.TEEPEE_OUTPUT_DIR;",
+        "const response = input.includes('[artifact-write-error]') ? 'Second attempt still broken' : 'First attempt broken';",
+        "fs.writeFileSync(path.join(out, 'files', 'plan.md'), '# blind update');",
+        "fs.writeFileSync(path.join(out, 'artifacts.json'), JSON.stringify({ documents: [",
+        "  { op: 'update', artifact_id: 1, base_version: 2, path: 'files/plan.md' }",
+        "] }));",
+        "fs.writeFileSync(path.join(out, 'response.md'), response);",
+        "console.log(response);",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        artifact_provider: { command: 'node artifact-auto-repair-fail-agent.js' },
+      },
+      agents: {
+        coder: { provider: 'artifact_provider', capability: 'host_allowed', profile: 'trusted' },
+      },
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder aggiorna il documento');
+
+    expect(getArtifactVersions(db, artifact.id)).toHaveLength(2);
+    const job = db.prepare('SELECT status, output_message_id, error FROM jobs ORDER BY id DESC LIMIT 1').get() as any;
+    expect(job.status).toBe('failed');
+    expect(job.output_message_id).toBeNull();
+    expect(job.error).toContain('requires read-current');
+    const agentMessageCount = db.prepare("SELECT COUNT(*) as count FROM messages WHERE topic_id = ? AND author_type = 'agent'").get(topicId) as { count: number };
+    expect(agentMessageCount.count).toBe(0);
+    expect(callbacks.calls.onJobRetrying).toHaveLength(1);
+    expect(callbacks.calls.onJobFailed).toHaveLength(1);
+    expect(callbacks.calls.onJobCompleted).toHaveLength(0);
   });
 });

@@ -10,7 +10,7 @@ function setup() {
   const broadcasts: any[] = [];
   const makeCtx = (topicId: number, role = 'owner'): CommandContext => ({
     db,
-    user: { email: 'test@test.com', handle: 'tester', role, status: 'active' },
+    user: { id: 'usr_test', email: 'test@test.com', handle: 'tester', role, status: 'active' },
     topicId,
     broadcast: (_tid, evt) => broadcasts.push(evt),
   });
@@ -229,11 +229,11 @@ describe('permission checks', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('allows user role for move commands', () => {
+  it('allows collaborator role for move commands', () => {
     const { db, makeCtx } = setup();
     const a = createTopic(db, 'A');
     const b = createTopic(db, 'B');
-    const result = executeCommand('topic.move.into', makeCtx(a, 'user'), { targetId: b });
+    const result = executeCommand('topic.move.into', makeCtx(a, 'collaborator'), { targetId: b });
     expect(result.ok).toBe(true);
   });
 });

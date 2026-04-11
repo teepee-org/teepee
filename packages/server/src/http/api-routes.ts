@@ -1,21 +1,45 @@
 import * as http from 'http';
+import * as fs from 'fs';
+import * as nodePath from 'path';
 import {
   createTopic,
   getTopic,
   listTopics,
   getMessages,
+  getMessagesAround,
   createUser,
   listUsers,
-  setPermission,
   createInviteToken,
   revokeUserFull,
   reEnableUser,
   deleteUserPermanently,
+  promoteToOwner,
+  demoteFromOwner,
+  setUserRole,
   executeCommand,
   listArchivedTopics,
   restoreTopic,
   archiveTopic,
+  searchAll,
+  listTopicArtifacts,
+  searchArtifacts,
+  getArtifact,
+  getArtifactVersions,
+  getArtifactVersion,
+  getArtifactVersionByNumber,
+  promoteArtifact,
+  getEnrichedMessageArtifacts,
+  listVisibleTopicInputRequests,
+  getPendingJobInputRequest,
+  suggestWorkspaceFiles,
+  normalizeLegacyHref,
+  resolveReference,
+  detectMimeLanguage,
+  isPreviewable,
+  isTextPreviewable,
+  expirePendingJobInputRequests,
 } from 'teepee-core';
+import type { SearchScope, SearchType } from 'teepee-core';
 import type { SessionUser, CommandContext } from 'teepee-core';
 import type { ServerContext } from '../context.js';
 import {
@@ -42,10 +66,16 @@ export function handleApiRoute(
 
   if (url.pathname === '/api/admin/invite' && req.method === 'POST') {
     if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    if (ctx.config.mode !== 'shared') { json({ error: 'Invites are only available in shared mode' }, 403); return true; }
     readBody(req).then((body) => {
       try {
-        const { email, role } = JSON.parse(body);
-        try { createUser(ctx.db, email, role || 'user'); } catch { /* already exists */ }
+        const { email, role: rawRole } = JSON.parse(body);
+        const role = rawRole === 'user' ? 'collaborator' : (rawRole || 'collaborator');
+        if (!['collaborator', 'observer'].includes(role)) {
+          json({ error: `Invalid invite role: ${role}. Use 'collaborator' or 'observer'` }, 400);
+          return;
+        }
+        try { createUser(ctx.db, email, role); } catch { /* already exists */ }
         const token = createInviteToken(ctx.db, email);
         const { networkInterfaces } = require('os');
         const nets = networkInterfaces();
@@ -70,8 +100,8 @@ export function handleApiRoute(
     if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
     readBody(req).then((body) => {
       const { email } = JSON.parse(body);
-      revokeUserFull(ctx.db, email);
-      json({ ok: true });
+      const ok = revokeUserFull(ctx.db, email);
+      if (ok) { json({ ok: true }); } else { json({ error: 'Cannot revoke: user not found, already revoked, or is the last active owner' }, 400); }
     });
     return true;
   }
@@ -82,7 +112,7 @@ export function handleApiRoute(
       try {
         const { email } = JSON.parse(body);
         const ok = reEnableUser(ctx.db, email);
-        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot re-enable: user not found, not revoked, or is owner' }, 400); }
+        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot re-enable: user not found or not revoked' }, 400); }
       } catch (e: any) { json({ error: e.message }, 400); }
     });
     return true;
@@ -94,39 +124,63 @@ export function handleApiRoute(
       try {
         const { email } = JSON.parse(body);
         const ok = deleteUserPermanently(ctx.db, email);
-        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot delete: user not found or is owner' }, 400); }
+        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot delete: user not found or is the last active owner' }, 400); }
       } catch (e: any) { json({ error: e.message }, 400); }
     });
     return true;
   }
 
-  if (url.pathname.match(/^\/api\/admin\/permissions\/[^/]+$/) && req.method === 'GET') {
-    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
-    const email = decodeURIComponent(url.pathname.split('/')[4]);
-    const { getPermissions } = require('teepee-core');
-    const perms = getPermissions(ctx.db, email, null);
-    json(perms);
-    return true;
-  }
-
-  if (url.pathname === '/api/admin/allow' && req.method === 'POST') {
+  if (url.pathname === '/api/admin/role' && req.method === 'POST') {
     if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
     readBody(req).then((body) => {
-      const { email, agents } = JSON.parse(body);
-      const list = agents === '*' ? ['*'] : agents.split(',').map((a: string) => a.trim());
-      for (const agent of list) setPermission(ctx.db, email, null, agent, true);
-      json({ ok: true });
+      try {
+        const { email, role: rawRole } = JSON.parse(body);
+        const role = rawRole === 'user' ? 'collaborator' : rawRole;
+        if (!['owner', 'collaborator', 'observer'].includes(role)) {
+          json({ error: `Invalid role: ${role}. Use owner, collaborator, or observer` }, 400);
+          return;
+        }
+        const result = setUserRole(ctx.db, email, role, currentUser.email);
+        if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
+      } catch (e: any) { json({ error: e.message }, 400); }
     });
     return true;
   }
 
-  if (url.pathname === '/api/admin/deny' && req.method === 'POST') {
+  if (url.pathname === '/api/admin/access-matrix' && req.method === 'GET') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    json({
+      roles: ['owner', 'collaborator', 'observer'],
+      profiles: ['deny', 'readonly', 'draft', 'readwrite', 'trusted'],
+      agents: Object.entries(ctx.config.agents).map(([name, a]) => ({ name, provider: a.provider })),
+      matrix: ctx.config.roles,
+      mode: ctx.config.mode,
+      source: '.teepee/config.yaml',
+      editable: false,
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/admin/promote' && req.method === 'POST') {
     if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
     readBody(req).then((body) => {
-      const { email, agents } = JSON.parse(body);
-      const list = agents === '*' ? ['*'] : agents.split(',').map((a: string) => a.trim());
-      for (const agent of list) setPermission(ctx.db, email, null, agent, false);
-      json({ ok: true });
+      try {
+        const { email } = JSON.parse(body);
+        const result = promoteToOwner(ctx.db, email, currentUser.email);
+        if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
+      } catch (e: any) { json({ error: e.message }, 400); }
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/admin/demote' && req.method === 'POST') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    readBody(req).then((body) => {
+      try {
+        const { email } = JSON.parse(body);
+        const result = demoteFromOwner(ctx.db, email, currentUser.email);
+        if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
+      } catch (e: any) { json({ error: e.message }, 400); }
     });
     return true;
   }
@@ -139,7 +193,7 @@ export function handleApiRoute(
   }
 
   if (url.pathname === '/api/topics' && req.method === 'POST') {
-    if (currentUser.role === 'observer') { json({ error: 'Observers cannot create topics' }, 403); return true; }
+    if (currentUser.role !== 'owner' && currentUser.role !== 'collaborator') { json({ error: 'Observers cannot create topics' }, 403); return true; }
     readBody(req).then((body) => {
       const { name, parentTopicId } = JSON.parse(body);
       const id = createTopic(ctx.db, name, parentTopicId ?? null);
@@ -157,8 +211,22 @@ export function handleApiRoute(
     return true;
   }
 
+  if (url.pathname.match(/^\/api\/topics\/\d+\/messages\/around\/\d+$/) && req.method === 'GET') {
+    const parts = url.pathname.split('/');
+    const topicId = parseInt(parts[3]);
+    const messageId = parseInt(parts[6]);
+    const radius = parseInt(url.searchParams.get('radius') || '25');
+    const messages = getMessagesAround(ctx.db, topicId, messageId, radius);
+    if (!messages) {
+      json({ error: 'Message not found in topic' }, 404);
+      return true;
+    }
+    json(messages);
+    return true;
+  }
+
   if (url.pathname.match(/^\/api\/topics\/\d+\/messages$/) && req.method === 'POST') {
-    if (currentUser.role === 'observer') { json({ error: 'Observers cannot post messages' }, 403); return true; }
+    if (currentUser.role !== 'owner' && currentUser.role !== 'collaborator') { json({ error: 'Observers cannot post messages' }, 403); return true; }
     readBody(req).then(async (body) => {
       try {
         const { text } = JSON.parse(body);
@@ -180,6 +248,36 @@ export function handleApiRoute(
     return true;
   }
 
+  if (url.pathname === '/api/search' && req.method === 'GET') {
+    const q = url.searchParams.get('q') || '';
+    const type = (url.searchParams.get('type') || 'all') as SearchType;
+    const scope = (url.searchParams.get('scope') || 'all') as SearchScope;
+    const topicIdParam = url.searchParams.get('topicId');
+    const topicId = topicIdParam ? parseInt(topicIdParam) : undefined;
+    const includeArchived = url.searchParams.get('includeArchived') === '1';
+    const limit = parseInt(url.searchParams.get('limit') || '30');
+
+    if (!['all', 'topics', 'messages'].includes(type)) {
+      json({ error: `Invalid search type: ${type}` }, 400);
+      return true;
+    }
+    if (!['all', 'topic', 'subtree'].includes(scope)) {
+      json({ error: `Invalid search scope: ${scope}` }, 400);
+      return true;
+    }
+    if ((scope === 'topic' || scope === 'subtree') && !topicId) {
+      json({ error: 'topicId is required for scoped search' }, 400);
+      return true;
+    }
+
+    try {
+      json(searchAll(ctx.db, q, type, { scope, topicId, includeArchived, limit }));
+    } catch (e: any) {
+      json({ error: e.message }, 400);
+    }
+    return true;
+  }
+
   if (url.pathname === '/api/project' && req.method === 'GET') {
     let gitBranch: string | null = null;
     try {
@@ -191,7 +289,7 @@ export function handleApiRoute(
       path: ctx.basePath,
       language: ctx.config.teepee.language,
       gitBranch,
-      securityMode: ctx.insecure ? 'insecure' : 'secure',
+      mode: ctx.config.mode,
       bindHost: ctx.bindHost,
       demo: (ctx.config.teepee as any).demo,
     });
@@ -245,7 +343,7 @@ export function handleApiRoute(
   // ── Topic move ──
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/move$/) && req.method === 'POST') {
-    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    if (currentUser.role !== 'owner' && currentUser.role !== 'collaborator') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
     readBody(req).then((body) => {
       try {
         const { action, targetId } = JSON.parse(body);
@@ -276,7 +374,7 @@ export function handleApiRoute(
   }
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/archive$/) && req.method === 'POST') {
-    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    if (currentUser.role !== 'owner' && currentUser.role !== 'collaborator') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
     const topicId = parseInt(url.pathname.split('/')[3]);
     archiveTopic(ctx.db, topicId);
     ctx.broadcastGlobal({ type: 'topics.changed' });
@@ -285,11 +383,397 @@ export function handleApiRoute(
   }
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/restore$/) && req.method === 'POST') {
-    if (currentUser.role === 'observer') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
+    if (currentUser.role !== 'owner' && currentUser.role !== 'collaborator') { json({ error: 'Observers cannot modify topics' }, 403); return true; }
     const topicId = parseInt(url.pathname.split('/')[3]);
     restoreTopic(ctx.db, topicId);
     ctx.broadcastGlobal({ type: 'topics.changed' });
     json({ ok: true });
+    return true;
+  }
+
+  // ── Artifacts ──
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/artifacts$/) && req.method === 'GET') {
+    const topicId = parseInt(url.pathname.split('/')[3]);
+    json(listTopicArtifacts(ctx.db, topicId));
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/artifacts\/\d+$/) && req.method === 'GET') {
+    const artifactId = parseInt(url.pathname.split('/')[3]);
+    const artifact = getArtifact(ctx.db, artifactId);
+    if (!artifact) { json({ error: 'Artifact not found' }, 404); return true; }
+    json(artifact);
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/artifacts\/\d+\/versions$/) && req.method === 'GET') {
+    const artifactId = parseInt(url.pathname.split('/')[3]);
+    const artifact = getArtifact(ctx.db, artifactId);
+    if (!artifact) { json({ error: 'Artifact not found' }, 404); return true; }
+    json(getArtifactVersions(ctx.db, artifactId));
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/artifacts\/\d+\/versions\/\d+$/) && req.method === 'GET') {
+    const parts = url.pathname.split('/');
+    const artifactId = parseInt(parts[3]);
+    const versionId = parseInt(parts[5]);
+    const version = getArtifactVersion(ctx.db, artifactId, versionId);
+    if (!version) { json({ error: 'Version not found' }, 404); return true; }
+    json(version);
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/artifacts\/\d+\/versions\/\d+\/download$/) && req.method === 'GET') {
+    const parts = url.pathname.split('/');
+    const artifactId = parseInt(parts[3]);
+    const versionId = parseInt(parts[5]);
+    const version = getArtifactVersion(ctx.db, artifactId, versionId);
+    if (!version) { json({ error: 'Version not found' }, 404); return true; }
+    const artifact = getArtifact(ctx.db, artifactId);
+    const filename = `${artifact?.title?.replace(/[^a-zA-Z0-9_-]/g, '_') ?? 'document'}_v${version.version}.md`;
+    res.writeHead(200, {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    res.end(version.body);
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/artifacts\/\d+\/versions\/\d+\/promote$/) && req.method === 'POST') {
+    if (currentUser.role !== 'owner') { json({ error: 'Owner only' }, 403); return true; }
+    const parts = url.pathname.split('/');
+    const artifactId = parseInt(parts[3]);
+    const versionId = parseInt(parts[5]);
+    readBody(req).then((body) => {
+      try {
+        const { repoPath } = JSON.parse(body);
+        if (!repoPath || typeof repoPath !== 'string') {
+          json({ error: 'repoPath is required' }, 400);
+          return;
+        }
+        const ALLOWED_PREFIXES = ['doc/', 'docs/', 'spec/'];
+        if (!ALLOWED_PREFIXES.some((p) => repoPath.startsWith(p))) {
+          json({ error: `repoPath must start with one of: ${ALLOWED_PREFIXES.join(', ')}` }, 400);
+          return;
+        }
+        if (repoPath.includes('..')) {
+          json({ error: 'Path traversal not allowed' }, 400);
+          return;
+        }
+        const version = getArtifactVersion(ctx.db, artifactId, versionId);
+        if (!version) { json({ error: 'Version not found' }, 404); return; }
+        const { execFileSync } = require('child_process');
+        const fs = require('fs');
+        const path = require('path');
+        const fullPath = path.join(ctx.basePath, repoPath);
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, version.body, 'utf-8');
+        let commitSha = '';
+        try {
+          const title = getArtifact(ctx.db, artifactId)?.title ?? String(artifactId);
+          execFileSync('git', ['add', '--', repoPath], { cwd: ctx.basePath, encoding: 'utf-8' });
+          execFileSync('git', ['commit', '-m', `Promote artifact: ${title}`], { cwd: ctx.basePath, encoding: 'utf-8' });
+          commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ctx.basePath, encoding: 'utf-8' }).trim();
+        } catch (gitErr: any) {
+          json({ error: `Git commit failed: ${gitErr.message}` }, 500);
+          return;
+        }
+        promoteArtifact(ctx.db, artifactId, repoPath, commitSha);
+        json({ ok: true, repoPath, commitSha });
+      } catch (e: any) {
+        json({ error: e.message }, 400);
+      }
+    });
+    return true;
+  }
+
+  // ── Message artifacts lookup ──
+
+  if (url.pathname.match(/^\/api\/messages\/\d+\/artifacts$/) && req.method === 'GET') {
+    const messageId = parseInt(url.pathname.split('/')[3]);
+    json(getEnrichedMessageArtifacts(ctx.db, messageId));
+    return true;
+  }
+
+  // ── Job input requests ──
+
+  if (url.pathname.match(/^\/api\/topics\/\d+\/input-requests$/) && req.method === 'GET') {
+    expirePendingJobInputRequests(ctx.db);
+    const topicId = parseInt(url.pathname.split('/')[3]);
+    json(listVisibleTopicInputRequests(ctx.db, topicId));
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/jobs\/\d+\/input-request$/) && req.method === 'GET') {
+    expirePendingJobInputRequests(ctx.db);
+    const jobId = parseInt(url.pathname.split('/')[3]);
+    const request = getPendingJobInputRequest(ctx.db, jobId);
+    if (!request) {
+      json({ error: 'Input request not found' }, 404);
+      return true;
+    }
+    json(request);
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/input-requests\/\d+\/answer$/) && req.method === 'POST') {
+    readBody(req).then(async (body) => {
+      try {
+        expirePendingJobInputRequests(ctx.db);
+        const requestId = parseInt(url.pathname.split('/')[3]);
+        const payload = JSON.parse(body);
+        const resumed = await ctx.orchestrator.resumeJobFromUserInput(requestId, currentUser.id, payload);
+        ctx.broadcast(resumed.topicId, {
+          type: 'job.input.answered',
+          topicId: resumed.topicId,
+          jobId: resumed.jobId,
+          requestId: resumed.requestId,
+        });
+        json({ ok: true });
+      } catch (e: any) {
+        const message = e?.message || String(e);
+        const status =
+          message.includes('not found') ? 404
+            : message.includes('not pending') || message.includes('no longer pending') ? 409
+            : message.includes('Only the user who started') ? 403
+            : 400;
+        json({ error: message }, status);
+      }
+    });
+    return true;
+  }
+
+  if (url.pathname.match(/^\/api\/input-requests\/\d+\/cancel$/) && req.method === 'POST') {
+    readBody(req).then(async () => {
+      try {
+        expirePendingJobInputRequests(ctx.db);
+        const requestId = parseInt(url.pathname.split('/')[3]);
+        const cancelled = await ctx.orchestrator.cancelJobFromUserInput(requestId, currentUser.id, currentUser.role as any);
+        ctx.broadcast(cancelled.topicId, {
+          type: 'job.input.cancelled',
+          topicId: cancelled.topicId,
+          jobId: cancelled.jobId,
+          requestId,
+        });
+        json({ ok: true });
+      } catch (e: any) {
+        const message = e?.message || String(e);
+        const status =
+          message.includes('not found') ? 404
+            : message.includes('not pending') || message.includes('no longer pending') ? 409
+            : message.includes('Only the requester or an owner') ? 403
+            : 400;
+        json({ error: message }, status);
+      }
+    });
+    return true;
+  }
+
+  // ── References ──
+
+  if (url.pathname === '/api/references/suggest' && req.method === 'GET') {
+    const q = url.searchParams.get('q') || '';
+    const topicIdParam = url.searchParams.get('topicId');
+    const topicId = topicIdParam ? parseInt(topicIdParam) : undefined;
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '20'), 50);
+
+    const workspaceItems = suggestWorkspaceFiles(ctx.basePath, q, limit * 2);
+
+    const topicArtifactIds = new Set<number>();
+    if (topicId) {
+      for (const a of listTopicArtifacts(ctx.db, topicId)) {
+        topicArtifactIds.add(a.id);
+      }
+    }
+
+    const allArtifacts = searchArtifacts(ctx.db, q, limit * 2);
+
+    const ql = q.toLowerCase();
+    const artifactItems = allArtifacts
+      .filter((a) => {
+        if (!q) return true;
+        return (
+          a.title.toLowerCase().includes(ql) ||
+          a.kind.toLowerCase().includes(ql) ||
+          (a.promoted_repo_path && a.promoted_repo_path.toLowerCase().includes(ql))
+        );
+      })
+      .map((a) => {
+        let score = 0;
+        if (ql) {
+          const tl = a.title.toLowerCase();
+          if (tl.startsWith(ql)) score = 100;
+          else if (tl.includes(ql)) score = 80;
+          else score = 40;
+        }
+        if (topicId && topicArtifactIds.has(a.id)) score += 50;
+        return {
+          type: 'artifact_document' as const,
+          label: a.title,
+          insertText: `[${a.title}](teepee:/artifact/${a.id})`,
+          canonicalUri: `teepee:/artifact/${a.id}`,
+          description: `${a.kind} artifact`,
+          score,
+        };
+      });
+
+    type RankedReferenceItem = {
+      type: 'workspace_file' | 'artifact_document';
+      label: string;
+      insertText: string;
+      canonicalUri: string;
+      description: string;
+      score: number;
+    };
+
+    const rankedItems: RankedReferenceItem[] = [...workspaceItems, ...artifactItems]
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.label.localeCompare(b.label);
+      })
+      .slice(0, limit);
+
+    const items = rankedItems.map(({ score: _, ...item }) => item);
+
+    json({ items });
+    return true;
+  }
+
+  if (url.pathname === '/api/references/resolve' && req.method === 'POST') {
+    readBody(req).then((body) => {
+      try {
+        let { href } = JSON.parse(body);
+        if (!href || typeof href !== 'string') {
+          json({ error: 'href is required' }, 400);
+          return;
+        }
+
+        const normalized = normalizeLegacyHref(href, ctx.basePath);
+        if (normalized) href = normalized;
+
+        const resolved = resolveReference(href, ctx.basePath);
+        if (!resolved) {
+          json({ error: 'Cannot resolve reference' }, 404);
+          return;
+        }
+
+        if (resolved.targetType === 'artifact-document' && resolved.fetch.kind === 'artifact-document') {
+          const artifact = getArtifact(ctx.db, resolved.fetch.artifactId);
+          if (!artifact) {
+            json({ error: 'Artifact not found' }, 404);
+            return;
+          }
+          if (resolved.fetch.version !== undefined) {
+            const version = getArtifactVersionByNumber(ctx.db, resolved.fetch.artifactId, resolved.fetch.version);
+            if (!version) {
+              json({ error: `Artifact version v${resolved.fetch.version} not found` }, 404);
+              return;
+            }
+          }
+          resolved.displayName = artifact.title;
+        }
+
+        json(resolved);
+      } catch (e: any) {
+        json({ error: e.message }, 400);
+      }
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/workspace/file' && req.method === 'GET') {
+    const filePath = url.searchParams.get('path');
+    if (!filePath || typeof filePath !== 'string') {
+      json({ error: 'path is required' }, 400);
+      return true;
+    }
+    if (filePath.includes('..') || filePath.startsWith('/')) {
+      json({ error: 'Invalid path' }, 400);
+      return true;
+    }
+
+    const fullPath = nodePath.join(ctx.basePath, filePath);
+    const resolved = nodePath.resolve(fullPath);
+    const resolvedBase = nodePath.resolve(ctx.basePath);
+    if (!resolved.startsWith(resolvedBase + nodePath.sep) && resolved !== resolvedBase) {
+      json({ error: 'Path outside project' }, 403);
+      return true;
+    }
+
+    try {
+      const real = fs.realpathSync(resolved);
+      if (!real.startsWith(resolvedBase + nodePath.sep)) {
+        json({ error: 'Symlink escape' }, 403);
+        return true;
+      }
+    } catch {
+      json({ error: 'File not found' }, 404);
+      return true;
+    }
+
+    try {
+      const stat = fs.statSync(fullPath);
+      const { mime } = detectMimeLanguage(filePath);
+      if (!isPreviewable(mime, stat.size)) {
+        json({ error: 'File too large or not previewable', size: stat.size, mime }, 413);
+        return true;
+      }
+      if (!isTextPreviewable(mime, stat.size)) {
+        json({ binary: true, mime, size: stat.size });
+        return true;
+      }
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      json({ content, mime, size: stat.size });
+    } catch {
+      json({ error: 'File not found' }, 404);
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/workspace/download' && req.method === 'GET') {
+    const filePath = url.searchParams.get('path');
+    const disposition = url.searchParams.get('disposition') === 'inline' ? 'inline' : 'attachment';
+    if (!filePath || typeof filePath !== 'string') {
+      json({ error: 'path is required' }, 400);
+      return true;
+    }
+    if (filePath.includes('..') || filePath.startsWith('/')) {
+      json({ error: 'Invalid path' }, 400);
+      return true;
+    }
+
+    const fullPath = nodePath.join(ctx.basePath, filePath);
+    const resolved = nodePath.resolve(fullPath);
+    const resolvedBase = nodePath.resolve(ctx.basePath);
+    if (!resolved.startsWith(resolvedBase + nodePath.sep) && resolved !== resolvedBase) {
+      json({ error: 'Path outside project' }, 403);
+      return true;
+    }
+
+    try {
+      const real = fs.realpathSync(resolved);
+      if (!real.startsWith(resolvedBase + nodePath.sep)) {
+        json({ error: 'Symlink escape' }, 403);
+        return true;
+      }
+      const stat = fs.statSync(real);
+      const { mime } = detectMimeLanguage(filePath);
+      if (disposition === 'inline' && !isPreviewable(mime, stat.size)) {
+        json({ error: 'File too large or not previewable', size: stat.size, mime }, 413);
+        return true;
+      }
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Disposition': `${disposition}; filename="${nodePath.basename(filePath)}"`,
+        'Content-Length': stat.size,
+        'X-Content-Type-Options': 'nosniff',
+      });
+      fs.createReadStream(real).pipe(res);
+    } catch {
+      json({ error: 'File not found' }, 404);
+    }
     return true;
   }
 

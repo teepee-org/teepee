@@ -9,7 +9,7 @@ function makeCtx(role: string = 'owner', topicId: number = 1): { ctx: CommandCon
   const broadcasts: any[] = [];
   const ctx: CommandContext = {
     db,
-    user: { email: 'test@test.com', handle: 'tester', role, status: 'active' },
+    user: { id: 'usr_test', email: 'test@test.com', handle: 'tester', role, status: 'active' },
     topicId,
     broadcast: (_tid, evt) => broadcasts.push(evt),
   };
@@ -88,7 +88,7 @@ describe('topic.alias', () => {
   });
 
   it('rejects non-owner', () => {
-    const { ctx } = makeCtx('user');
+    const { ctx } = makeCtx('collaborator');
     const result = executeCommand('topic.alias', ctx, { agent: 'coder', alias: 'c' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Owner only');

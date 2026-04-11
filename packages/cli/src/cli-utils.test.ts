@@ -24,9 +24,9 @@ describe('isLoopbackHost', () => {
 });
 
 describe('parseServeArgs', () => {
-  it('defaults to port 3000, host 127.0.0.1, insecure false', () => {
+  it('defaults to port 3000 and host 127.0.0.1', () => {
     const result = parseServeArgs(['serve']);
-    expect(result).toEqual({ port: 3000, host: '127.0.0.1', insecure: false });
+    expect(result).toEqual({ port: 3000, host: '127.0.0.1' });
   });
 
   it('parses --port', () => {
@@ -39,18 +39,17 @@ describe('parseServeArgs', () => {
     expect(result.host).toBe('0.0.0.0');
   });
 
-  it('parses --insecure', () => {
-    const result = parseServeArgs(['serve', '--insecure']);
-    expect(result.insecure).toBe(true);
+  it('rejects --insecure', () => {
+    expect(() => parseServeArgs(['serve', '--insecure'])).toThrow('--insecure has been removed');
   });
 
   it('parses all flags together', () => {
-    const result = parseServeArgs(['serve', '--port', '8080', '--host', '0.0.0.0', '--insecure']);
-    expect(result).toEqual({ port: 8080, host: '0.0.0.0', insecure: true });
+    const result = parseServeArgs(['serve', '--port', '8080', '--host', '0.0.0.0']);
+    expect(result).toEqual({ port: 8080, host: '0.0.0.0' });
   });
 
   it('works with start command too', () => {
-    const result = parseServeArgs(['start', '--insecure', '--port', '5000']);
-    expect(result).toEqual({ port: 5000, host: '127.0.0.1', insecure: true });
+    const result = parseServeArgs(['start', '--port', '5000']);
+    expect(result).toEqual({ port: 5000, host: '127.0.0.1' });
   });
 });

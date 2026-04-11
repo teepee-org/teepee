@@ -16,23 +16,29 @@ export interface ProviderConfig {
   sandbox?: ProviderSandboxConfig;
 }
 
-export type AgentCapability = 'host_allowed' | 'sandbox_only' | 'disabled';
+export type UserRole = 'owner' | 'collaborator' | 'observer';
+
+export type TeepeeMode = 'private' | 'shared';
+
+export type AgentAccessProfile = 'readonly' | 'draft' | 'readwrite' | 'trusted';
+
+/** @deprecated Use AgentAccessProfile. */
+export type AgentProfile = AgentAccessProfile;
+
+export type RoleAgentMatrix = Record<UserRole, Record<string, AgentAccessProfile>>;
+
+export type ChainPolicy = 'none' | 'propose_only' | 'delegate_with_origin_policy';
 
 export interface AgentConfig {
   provider: string;
   prompt?: string;
   timeout_seconds?: number;
-  capability?: AgentCapability;
+  chain_policy?: ChainPolicy;
 }
 
-export type ExecutionMode = 'host' | 'sandbox' | 'disabled';
+export type ExecutionMode = 'host' | 'sandbox' | 'db_only' | 'disabled';
 
 export interface SecurityConfig {
-  role_defaults: {
-    owner: ExecutionMode;
-    user: ExecutionMode;
-    observer: ExecutionMode;
-  };
   sandbox: {
     runner: 'bubblewrap' | 'container';
     empty_home: boolean;
@@ -51,6 +57,8 @@ export interface LimitsConfig {
 }
 
 export interface TeepeeConfig {
+  version: 1;
+  mode: TeepeeMode;
   teepee: {
     name: string;
     language: string;
@@ -69,6 +77,7 @@ export interface TeepeeConfig {
   };
   providers: Record<string, ProviderConfig>;
   agents: Record<string, AgentConfig>;
+  roles: RoleAgentMatrix;
   limits: LimitsConfig;
   security: SecurityConfig;
 }
@@ -95,11 +104,6 @@ const DEFAULT_LIMITS: LimitsConfig = {
 };
 
 const DEFAULT_SECURITY: SecurityConfig = {
-  role_defaults: {
-    owner: 'host',
-    user: 'sandbox',
-    observer: 'disabled',
-  },
   sandbox: {
     runner: 'bubblewrap',
     empty_home: true,
@@ -115,6 +119,9 @@ export function loadConfig(configPath: string): TeepeeConfig {
 
   const raw = fs.readFileSync(configPath, 'utf-8');
   const parsed = parseYaml(raw);
+  validateTopLevelSecurityKeys(parsed);
+  const version = parseConfigVersion(parsed.version);
+  const mode = parseConfigMode(parsed.mode);
 
   // Validate teepee section
   if (!parsed.teepee?.name) {
@@ -122,6 +129,8 @@ export function loadConfig(configPath: string): TeepeeConfig {
   }
 
   const config: TeepeeConfig = {
+    version,
+    mode,
     teepee: {
       name: parsed.teepee.name,
       language: parsed.teepee.language || 'en',
@@ -146,6 +155,7 @@ export function loadConfig(configPath: string): TeepeeConfig {
     },
     providers: {},
     agents: {},
+    roles: { owner: {}, collaborator: {}, observer: {} },
     limits: { ...DEFAULT_LIMITS, ...parsed.limits },
     security: buildSecurityConfig(parsed.security),
   };
@@ -185,6 +195,7 @@ export function loadConfig(configPath: string): TeepeeConfig {
   }
 
   const agentNames = new Set<string>();
+  const usingRoleMatrix = parsed.roles !== undefined;
   for (const [name, ag] of Object.entries(parsed.agents)) {
     const a = ag as any;
     if (!a.provider) {
@@ -200,20 +211,38 @@ export function loadConfig(configPath: string): TeepeeConfig {
     }
     agentNames.add(name);
 
-    const capability = a.capability ?? 'host_allowed';
-    if (!['host_allowed', 'sandbox_only', 'disabled'].includes(capability)) {
-      throw new Error(
-        `Config: agent '${name}' has invalid capability '${capability}'`
-      );
+    if (usingRoleMatrix) {
+      if (a.profile !== undefined) {
+        throw new Error(`Config: agent '${name}' uses legacy 'profile'; move access profiles to roles.<role>.${name}`);
+      }
+      if (a.capability !== undefined) {
+        throw new Error(`Config: agent '${name}' uses legacy 'capability'; omit the agent from roles to deny access`);
+      }
+    } else {
+      validateLegacyAgentSecurity(name, a);
+    }
+
+    let chainPolicy: ChainPolicy;
+    if (a.chain_policy !== undefined) {
+      if (!VALID_CHAIN_POLICIES.has(a.chain_policy)) {
+        throw new Error(`Config: agent '${name}' has invalid chain_policy '${a.chain_policy}'`);
+      }
+      chainPolicy = a.chain_policy as ChainPolicy;
+    } else {
+      chainPolicy = 'delegate_with_origin_policy';
     }
 
     config.agents[name] = {
       provider: a.provider,
       prompt: a.prompt,
       timeout_seconds: a.timeout_seconds,
-      capability: capability as AgentCapability,
+      chain_policy: chainPolicy,
     };
   }
+
+  config.roles = usingRoleMatrix
+    ? buildRoleAgentMatrix(parsed.roles, agentNames)
+    : buildLegacyRoleAgentMatrix(parsed.agents, agentNames);
 
   return config;
 }
@@ -264,34 +293,152 @@ export function resolveTimeout(
   return 120_000;
 }
 
-const VALID_EXECUTION_MODES = new Set<string>(['host', 'sandbox', 'disabled']);
-const VALID_CAPABILITIES = new Set<string>(['host_allowed', 'sandbox_only', 'disabled']);
+const VALID_LEGACY_CAPABILITIES = new Set<string>(['host_allowed', 'sandbox_only', 'disabled']);
+const VALID_LEGACY_AGENT_PROFILES = new Set<string>(['restricted', 'normal', 'trusted']);
+const VALID_ACCESS_PROFILES = new Set<string>(['readonly', 'draft', 'readwrite', 'trusted']);
+const VALID_CHAIN_POLICIES = new Set<string>(['none', 'propose_only', 'delegate_with_origin_policy']);
 const VALID_SANDBOX_RUNNERS = new Set<string>(['bubblewrap', 'container']);
-
-function validateExecutionMode(value: unknown, path: string): ExecutionMode {
-  if (typeof value !== 'string' || !VALID_EXECUTION_MODES.has(value)) {
-    throw new Error(`Config: ${path} must be one of: host, sandbox, disabled (got '${value}')`);
+function validateTopLevelSecurityKeys(parsed: any): void {
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('Config: expected a YAML object');
   }
-  return value as ExecutionMode;
+  for (const key of Object.keys(parsed)) {
+    if (key === 'default_role') {
+      throw new Error("Config: default_role is not supported; assign roles explicitly via invites/users");
+    }
+    if (key === 'profiles') {
+      throw new Error(`Config: custom '${key}' are not supported; profiles are built-in: readonly, draft, readwrite, trusted`);
+    }
+  }
+}
+
+function parseConfigVersion(value: unknown): 1 {
+  if (value === undefined || value === null) return 1;
+  if (value !== 1) {
+    throw new Error(`Config: version must be 1 (got '${value}')`);
+  }
+  return 1;
+}
+
+function parseConfigMode(value: unknown): TeepeeMode {
+  if (value === undefined || value === null) return 'private';
+  if (value === 'private' || value === 'shared') return value;
+  throw new Error(`Config: mode must be 'private' or 'shared' (got '${value}')`);
+}
+
+const VALID_SECURITY_KEYS = new Set(['sandbox']);
+const VALID_SANDBOX_KEYS = new Set(['runner', 'empty_home', 'private_tmp', 'forward_env', 'container_image']);
+const USER_ROLES = ['owner', 'collaborator', 'observer'] as const;
+
+function validateLegacyAgentSecurity(name: string, agent: any): void {
+  if (agent.capability !== undefined && !VALID_LEGACY_CAPABILITIES.has(agent.capability)) {
+    throw new Error(
+      `Config: agent '${name}' has invalid capability '${agent.capability}'`
+    );
+  }
+  if (agent.profile !== undefined && !VALID_LEGACY_AGENT_PROFILES.has(agent.profile)) {
+    throw new Error(
+      `Config: agent '${name}' has invalid profile '${agent.profile}'`
+    );
+  }
+}
+
+function buildLegacyRoleAgentMatrix(rawAgents: any, agentNames: Set<string>): RoleAgentMatrix {
+  const roles = emptyRoleAgentMatrix();
+
+  for (const agent of agentNames) {
+    const raw = rawAgents[agent] ?? {};
+    const capability = raw.capability ?? 'host_allowed';
+    const legacyProfile = raw.profile ?? 'normal';
+
+    if (capability === 'disabled') continue;
+
+    if (legacyProfile === 'restricted') {
+      roles.owner[agent] = 'readonly';
+      roles.collaborator[agent] = 'readonly';
+      continue;
+    }
+
+    if (legacyProfile === 'trusted') {
+      roles.owner[agent] = 'trusted';
+      continue;
+    }
+
+    roles.owner[agent] = 'readwrite';
+    roles.collaborator[agent] = 'readwrite';
+  }
+
+  return roles;
+}
+
+function buildRoleAgentMatrix(rawRoles: any, agentNames: Set<string>): RoleAgentMatrix {
+  if (typeof rawRoles !== 'object' || rawRoles === null || Array.isArray(rawRoles)) {
+    throw new Error('Config: roles must be an object mapping owner/collaborator/observer to agents');
+  }
+
+  const roles = emptyRoleAgentMatrix();
+  for (const role of USER_ROLES) {
+    const rawRole = rawRoles[role];
+    if (rawRole === undefined) continue;
+    if (typeof rawRole !== 'object' || rawRole === null || Array.isArray(rawRole)) {
+      throw new Error(`Config: roles.${role} must be an object`);
+    }
+
+    for (const [agent, profile] of Object.entries(rawRole)) {
+      if (!agentNames.has(agent)) {
+        throw new Error(`Config: roles.${role}.${agent} references unknown agent '${agent}'`);
+      }
+      if (typeof profile !== 'string' || !VALID_ACCESS_PROFILES.has(profile)) {
+        throw new Error(`Config: roles.${role}.${agent} must be one of: readonly, draft, readwrite, trusted (got '${profile}')`);
+      }
+      roles[role][agent] = profile as AgentAccessProfile;
+    }
+  }
+
+  for (const key of Object.keys(rawRoles)) {
+    if (!USER_ROLES.includes(key as UserRole)) {
+      throw new Error(`Config: unknown roles key '${key}'. Use owner, collaborator, or observer`);
+    }
+  }
+
+  return roles;
+}
+
+function emptyRoleAgentMatrix(): RoleAgentMatrix {
+  return { owner: {}, collaborator: {}, observer: {} };
+}
+
+export function resolveRoleAgentProfile(
+  config: TeepeeConfig,
+  role: UserRole,
+  agentName: string
+): AgentAccessProfile | null {
+  if (!config.agents[agentName]) return null;
+  const roleMatrix = config.roles[role];
+  if (!roleMatrix) return null;
+  return roleMatrix[agentName] ?? null;
 }
 
 function buildSecurityConfig(raw: any): SecurityConfig {
   if (!raw) return { ...DEFAULT_SECURITY };
 
-  const roleDefaults = { ...DEFAULT_SECURITY.role_defaults };
-  if (raw.role_defaults) {
-    for (const role of ['owner', 'user', 'observer'] as const) {
-      if (raw.role_defaults[role] !== undefined) {
-        roleDefaults[role] = validateExecutionMode(
-          raw.role_defaults[role],
-          `security.role_defaults.${role}`
-        );
+  if (typeof raw === 'object' && raw !== null) {
+    for (const key of Object.keys(raw)) {
+      if (!VALID_SECURITY_KEYS.has(key)) {
+        throw new Error(`Config: unknown security key '${key}'`);
       }
     }
   }
 
   const sandbox = { ...DEFAULT_SECURITY.sandbox };
   if (raw.sandbox) {
+    if (typeof raw.sandbox === 'object' && raw.sandbox !== null) {
+      for (const key of Object.keys(raw.sandbox)) {
+        if (!VALID_SANDBOX_KEYS.has(key)) {
+          throw new Error(`Config: unknown security.sandbox key '${key}'`);
+        }
+      }
+    }
     if (raw.sandbox.runner !== undefined) {
       if (!VALID_SANDBOX_RUNNERS.has(raw.sandbox.runner)) {
         throw new Error(
@@ -316,7 +463,7 @@ function buildSecurityConfig(raw: any): SecurityConfig {
     }
   }
 
-  return { role_defaults: roleDefaults, sandbox };
+  return { sandbox };
 }
 
 function normalizeOrigins(value: unknown): string[] {

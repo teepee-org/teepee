@@ -1,9 +1,15 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { AgentSlot } from './AgentSlot';
 import { ComposeBox } from './ComposeBox';
+import { ArtifactViewer } from './ArtifactViewer';
+import { ReferenceViewer } from './ReferenceViewer';
+import { TopicArtifactList } from './TopicArtifactList';
+import { JobInputCard } from './JobInputCard';
 import type { Message, Agent } from '../types';
 import type { CommandDef } from '../buildHelpMarkdown';
+import type { PendingInputRequest } from '../api';
+import { parseTeepeeUri } from '../teepee-uri';
 
 interface ActiveJob {
   jobId: number;
@@ -20,14 +26,52 @@ interface Props {
   agents: Agent[];
   commands: CommandDef[];
   activeJobs: ActiveJob[];
+  inputRequests: PendingInputRequest[];
+  currentUserId: string | null;
   onSend: (text: string) => void;
+  onAnswerInput: (requestId: number, payload: { value: boolean | string | string[]; comment?: string }) => Promise<void>;
+  onCancelInput: (requestId: number) => Promise<void>;
   onMenuToggle?: () => void;
+  highlightedMessageId?: number | null;
+  isOwner?: boolean;
+  projectPath?: string;
 }
 
-export function ChatView({ topicId, topicName, messages, agents, commands, activeJobs, onSend, onMenuToggle }: Props) {
+export function ChatView({
+  topicId,
+  topicName,
+  messages,
+  agents,
+  commands,
+  activeJobs,
+  inputRequests,
+  currentUserId,
+  onSend,
+  onAnswerInput,
+  onCancelInput,
+  onMenuToggle,
+  highlightedMessageId,
+  isOwner = false,
+  projectPath,
+}: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
+  const [openArtifact, setOpenArtifact] = useState<{ artifactId: number; versionId: number; versionNumber?: number } | null>(null);
+  const [openRef, setOpenRef] = useState<string | null>(null);
+  const visibleInputRequests = inputRequests.filter((request) => request.status === 'pending');
+
+  const handleOpenReference = useCallback((href: string) => {
+    const parsed = parseTeepeeUri(href);
+    if (parsed?.namespace === 'artifact') {
+      const artifactId = parseInt(parsed.resource, 10);
+      if (!Number.isNaN(artifactId)) {
+        setOpenArtifact({ artifactId, versionId: 0, versionNumber: parsed.artifactVersion });
+        return;
+      }
+    }
+    setOpenRef(href);
+  }, []);
 
   // Track if user is at bottom
   const handleScroll = () => {
@@ -44,6 +88,41 @@ export function ChatView({ topicId, topicName, messages, agents, commands, activ
     }
   }, [messages, activeJobs]);
 
+  useEffect(() => {
+    if (!highlightedMessageId) return;
+    const target = containerRef.current?.querySelector(`[data-message-id="${highlightedMessageId}"]`);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightedMessageId, messages]);
+
+  if (openRef) {
+    return (
+      <div className="chat-view">
+        <ReferenceViewer
+          href={openRef}
+          projectPath={projectPath}
+          onClose={() => setOpenRef(null)}
+          onOpenReference={handleOpenReference}
+        />
+      </div>
+    );
+  }
+
+  if (openArtifact) {
+    return (
+      <div className="chat-view">
+        <ArtifactViewer
+          artifactId={openArtifact.artifactId}
+          versionId={openArtifact.versionId}
+          versionNumber={openArtifact.versionNumber}
+          isOwner={isOwner}
+          onClose={() => setOpenArtifact(null)}
+          projectPath={projectPath}
+          onOpenReference={handleOpenReference}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="chat-view">
       <div className="chat-header">
@@ -58,13 +137,35 @@ export function ChatView({ topicId, topicName, messages, agents, commands, activ
         )}
         <h2>{topicName} <span className="topic-id">#{topicId}</span></h2>
       </div>
+      <TopicArtifactList
+        topicId={topicId}
+        refreshKey={messages.length}
+        onOpenArtifact={(aId, vId) => setOpenArtifact({ artifactId: aId, versionId: vId })}
+      />
       <div
         className="chat-messages"
         ref={containerRef}
         onScroll={handleScroll}
       >
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            highlighted={msg.id === highlightedMessageId}
+            onOpenArtifact={(aId, vId) => setOpenArtifact({ artifactId: aId, versionId: vId })}
+            projectPath={projectPath}
+            onOpenReference={handleOpenReference}
+          />
+        ))}
+        {visibleInputRequests.map((request) => (
+          <JobInputCard
+            key={request.requestId}
+            request={request}
+            currentUserId={currentUserId}
+            canCancel={isOwner || currentUserId === request.requestedByUserId}
+            onAnswer={onAnswerInput}
+            onCancel={onCancelInput}
+          />
         ))}
         {activeJobs.filter((j) => j.status !== 'done').map((job) => (
           <AgentSlot
@@ -73,6 +174,8 @@ export function ChatView({ topicId, topicName, messages, agents, commands, activ
             status={job.status}
             streamContent={job.streamContent}
             error={job.error}
+            projectPath={projectPath}
+            onOpenReference={handleOpenReference}
           />
         ))}
         <div ref={messagesEndRef} />

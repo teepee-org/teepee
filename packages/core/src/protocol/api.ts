@@ -1,4 +1,5 @@
 import type { MessageRow } from '../db.js';
+import type { JobInputRequestPayload } from '../user-input/db.js';
 
 // ── API response shapes ──
 
@@ -18,6 +19,7 @@ export interface AgentResponse {
 }
 
 export interface UserResponse {
+  id: string;
   email: string;
   handle: string | null;
   role: string;
@@ -29,7 +31,7 @@ export interface ProjectResponse {
   path: string;
   language: string;
   gitBranch: string | null;
-  securityMode: 'secure' | 'insecure';
+  mode: 'private' | 'shared';
   bindHost: string;
   demo?: {
     enabled: boolean;
@@ -48,6 +50,7 @@ export interface StatusResponse {
 }
 
 export interface SessionResponse {
+  id: string;
   email: string;
   handle: string | null;
   role: string;
@@ -56,6 +59,48 @@ export interface SessionResponse {
 export interface InviteLinkResponse {
   link: string;
   token: string;
+}
+
+export interface ArtifactResponse {
+  id: number;
+  topic_id: number;
+  artifact_class: string;
+  kind: string;
+  title: string;
+  status: string;
+  canonical_source: string;
+  current_version_id: number | null;
+  promoted_repo_path: string | null;
+  promoted_commit_sha: string | null;
+  created_by_agent: string | null;
+  created_by_user_id: string | null;
+  created_by_user_email: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArtifactVersionResponse {
+  id: number;
+  artifact_id: number;
+  version: number;
+  content_type: string;
+  body: string;
+  summary: string | null;
+  created_by_agent: string | null;
+  created_by_user_id: string | null;
+  created_by_user_email: string | null;
+  created_at: string;
+}
+
+export type JobInputRequestResponse = JobInputRequestPayload;
+
+export interface MessageArtifactResponse {
+  artifact_id: number;
+  artifact_version_id: number;
+  relation: string;
+  kind: string;
+  title: string;
+  version: number;
 }
 
 export type { PresenceEntry } from './events.js';

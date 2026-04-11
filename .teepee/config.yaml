@@ -1,14 +1,17 @@
+version: 1
+mode: private
+
 teepee:
   name: teepee-demo
-  language: en
+  language: it
 
 providers:
   claude:
     command: "claude -p --permission-mode bypassPermissions --dangerously-skip-permissions"
-    timeout_seconds: 900
+    timeout_seconds: 90000
   codex:
     command: "codex exec --dangerously-bypass-approvals-and-sandbox"
-    timeout_seconds: 900
+    timeout_seconds: 90000
 
 agents:
   coder:
@@ -19,3 +22,17 @@ agents:
     provider: codex
   devops:
     provider: codex
+
+roles:
+  owner:
+    coder: trusted
+    reviewer: readwrite
+    architect: trusted
+    devops: trusted
+  collaborator:
+    coder: readwrite
+    reviewer: readwrite
+    architect: draft
+  observer:
+    architect: readonly
+    reviewer: readonly

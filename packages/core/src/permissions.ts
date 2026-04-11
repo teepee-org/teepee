@@ -1,54 +1,46 @@
 import type { Database as DatabaseType } from 'better-sqlite3';
-import { getUser, getPermissions, countRecentJobs } from './db.js';
-import type { LimitsConfig } from './config.js';
+import { getUser, countRecentJobs } from './db.js';
+import { resolveRoleAgentProfile } from './config.js';
+import type { LimitsConfig, TeepeeConfig, AgentAccessProfile, UserRole } from './config.js';
 
 /**
  * Check if a user can tag a specific agent, optionally scoped to a topic.
  *
  * Rules (deny-by-default, deny wins):
- * 1. owner → always allowed
- * 2. observer → always denied
- * 3. any matching deny (topic or global) → denied
- * 4. any matching allow (topic or global) → allowed
- * 5. no rule → denied
+ * 1. user must exist and be active
+ * 2. user.role is normalized to the built-in roles
+ * 3. roles[role][agent] grants the effective profile
+ * 4. missing role or missing agent mapping denies access
  */
 export function canTag(
   db: DatabaseType,
   email: string,
   agentName: string,
-  topicId: number | null
+  _topicId: number | null,
+  config: TeepeeConfig
 ): boolean {
+  return resolveUserAgentProfile(db, email, agentName, config) !== null;
+}
+
+export function resolveUserAgentProfile(
+  db: DatabaseType,
+  email: string,
+  agentName: string,
+  config: TeepeeConfig
+): AgentAccessProfile | null {
   const user = getUser(db, email);
-  if (!user || user.status !== 'active') return false;
+  if (!user || user.status !== 'active') return null;
 
-  // Owner always allowed
-  if (user.role === 'owner') return true;
+  const role = normalizeRoleForAccess(user.role);
+  if (!role) return null;
 
-  // Observer never allowed
-  if (user.role === 'observer') return false;
+  return resolveRoleAgentProfile(config, role, agentName);
+}
 
-  const perms = getPermissions(db, email, topicId);
-
-  // Check deny first — any matching deny blocks
-  for (const p of perms) {
-    if (!p.allowed) {
-      if (p.target_agent === '*' || p.target_agent === agentName) {
-        return false;
-      }
-    }
-  }
-
-  // Check allow
-  for (const p of perms) {
-    if (p.allowed) {
-      if (p.target_agent === '*' || p.target_agent === agentName) {
-        return true;
-      }
-    }
-  }
-
-  // Default: denied
-  return false;
+function normalizeRoleForAccess(role: string): UserRole | null {
+  if (role === 'user') return 'collaborator';
+  if (role === 'owner' || role === 'collaborator' || role === 'observer') return role;
+  return null;
 }
 
 /**
@@ -72,22 +64,26 @@ export function filterAllowedAgents(
   email: string,
   agentNames: string[],
   topicId: number,
-  limits: LimitsConfig
-): { allowed: string[]; denied: string[]; rateLimited: boolean } {
+  limits: LimitsConfig,
+  config: TeepeeConfig
+): { allowed: string[]; denied: string[]; rateLimited: boolean; profiles: Record<string, AgentAccessProfile> } {
   if (!checkRateLimit(db, email, limits)) {
-    return { allowed: [], denied: agentNames, rateLimited: true };
+    return { allowed: [], denied: agentNames, rateLimited: true, profiles: {} };
   }
 
   const allowed: string[] = [];
   const denied: string[] = [];
+  const profiles: Record<string, AgentAccessProfile> = {};
 
   for (const agent of agentNames) {
-    if (canTag(db, email, agent, topicId)) {
+    const profile = resolveUserAgentProfile(db, email, agent, config);
+    if (profile) {
       allowed.push(agent);
+      profiles[agent] = profile;
     } else {
       denied.push(agent);
     }
   }
 
-  return { allowed, denied, rateLimited: false };
+  return { allowed, denied, rateLimited: false, profiles };
 }

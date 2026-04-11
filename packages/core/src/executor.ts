@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import type { TeepeeConfig, ExecutionMode } from './config.js';
-import { resolvePrompt, resolveTimeout } from './config.js';
+import { resolvePrompt } from './config.js';
 import { getRecentMessages } from './db.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
@@ -11,6 +11,9 @@ export interface JobResult {
   output: string;
   exitCode: number;
   timedOut: boolean;
+  stderr?: string;
+  error?: string;
+  signal?: NodeJS.Signals | null;
 }
 
 /**
@@ -26,6 +29,13 @@ export interface JobResult {
  *   [current]
  *   <trigger message>
  */
+export interface ArtifactContextEntry {
+  id: number;
+  kind: string;
+  title: string;
+  current_version: number;
+}
+
 export function buildContext(
   db: DatabaseType,
   agentName: string,
@@ -33,7 +43,11 @@ export function buildContext(
   triggerMessageId: number,
   language: string,
   config: TeepeeConfig,
-  basePath: string
+  basePath: string,
+  topicArtifacts?: ArtifactContextEntry[],
+  artifactOpResults?: string,
+  artifactWriteError?: string,
+  userInputResults?: string
 ): string {
   const prompt = resolvePrompt(agentName, config.agents[agentName], basePath);
   const messages = getRecentMessages(db, topicId, 20);
@@ -59,6 +73,52 @@ export function buildContext(
   lines.push('When referring to another agent without triggering them, quote the mention like "@agent".');
   lines.push('');
 
+  if (topicArtifacts && topicArtifacts.length >= 0) {
+    lines.push('[artifacts/v2]');
+    lines.push('You may create or update Markdown document artifacts by writing artifacts.json and files under $TEEPEE_OUTPUT_DIR.');
+    lines.push('Artifact content access is lazy: request document reads by writing artifact-ops.json with read-current, read-version, or read-diff operations.');
+    lines.push('Do not emit update, rewrite-from-version, or restore operations unless you first read the current head version of that artifact in this run.');
+    lines.push('For any existing document edit, use this workflow: read-current on the target artifact, optionally read-version/read-diff for history, then write artifacts.json using base_version from read-current.');
+    lines.push('Prefer base_version: "current" after read-current; it is safer than copying numeric versions by hand and still requires the read-current precondition.');
+    lines.push("Use 'update' when history is only reference material. Use 'rewrite-from-version' when the requested content must be materially derived from a historical version; that requires both read-current of the head and read-version of source_version in the same run. Use 'restore' only to recreate an older version as the new head.");
+    if (topicArtifacts.length > 0) {
+      lines.push('Existing documents:');
+      for (const a of topicArtifacts) {
+        lines.push(`- artifact_id=${a.id} kind=${a.kind} title="${a.title}" current_version=${a.current_version}`);
+      }
+    }
+    lines.push('If the target is ambiguous, ask for clarification instead of guessing.');
+    lines.push('');
+  }
+
+  if (artifactOpResults) {
+    lines.push('[artifact-op-results]');
+    lines.push(artifactOpResults);
+    lines.push('');
+  }
+
+  if (artifactWriteError) {
+    lines.push('[artifact-write-error]');
+    lines.push(artifactWriteError);
+    lines.push('');
+  }
+
+  if (topicArtifacts !== undefined) {
+    lines.push('[user-input]');
+    lines.push('You may request structured human input by writing user-input.json under $TEEPEE_OUTPUT_DIR.');
+    lines.push('Do not wait for stdin. Teepee will pause the job and reinvoke you with [user-input-results].');
+    lines.push('Use this only when you are blocked on a human decision that materially changes the next action.');
+    lines.push('At most one pending input request is allowed per job.');
+    lines.push('In v1, only the user who started the job can answer.');
+    lines.push('');
+  }
+
+  if (userInputResults) {
+    lines.push('[user-input-results]');
+    lines.push(userInputResults);
+    lines.push('');
+  }
+
   lines.push('[messages]');
   for (const msg of messages) {
     lines.push(`${msg.author_name}> ${msg.body}`);
@@ -76,12 +136,13 @@ export function buildContext(
 export interface RunAgentOptions {
   command: string;
   context: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   cwd: string;
   executionMode?: ExecutionMode;
   sandboxRunner?: SandboxRunner;
   sandboxOptions?: SandboxOptions;
   onChunk?: (chunk: string) => void;
+  outputDir?: string;
 }
 
 /**
@@ -105,31 +166,37 @@ export function runAgent(
     const parts = prepareCommandParts(opts.command);
     const isCodexExecJson = isCodexExecCommand(parts);
 
-    // Runtime guard: only 'host' and 'sandbox' are runnable modes.
-    // Any unknown or 'disabled' mode must not reach here, but if it does, fail closed.
-    if (opts.executionMode && opts.executionMode !== 'host' && opts.executionMode !== 'sandbox') {
+    const RUNNABLE_MODES = new Set(['host', 'sandbox']);
+    if (opts.executionMode && !RUNNABLE_MODES.has(opts.executionMode)) {
       resolve({ output: `Blocked: unknown execution mode '${opts.executionMode}'`, exitCode: 1, timedOut: false });
       return;
     }
 
     let proc;
-    if (opts.executionMode === 'sandbox' && opts.sandboxRunner && opts.sandboxOptions) {
+    const useSandbox = opts.executionMode === 'sandbox';
+    if (useSandbox && opts.sandboxRunner && opts.sandboxOptions) {
       proc = opts.sandboxRunner.spawn(parts[0], parts.slice(1), opts.sandboxOptions);
     } else {
+      const hostEnv = { ...process.env };
+      if (opts.outputDir) {
+        hostEnv.TEEPEE_OUTPUT_DIR = opts.outputDir;
+      }
       proc = spawn(parts[0], parts.slice(1), {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: hostEnv,
         cwd: opts.cwd,
       });
     }
 
     let output = '';
-    let timedOut = false;
+    let stderr = '';
+    let settled = false;
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill('SIGKILL');
-    }, opts.timeoutMs);
+    const resolveOnce = (result: JobResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
     proc.stdout!.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -139,30 +206,32 @@ export function runAgent(
       }
     });
 
-    proc.stderr!.on('data', () => {
-      // Discard stderr
+    proc.stderr!.on('data', (data: Buffer) => {
+      stderr += data.toString();
     });
 
     proc.stdin!.on('error', () => {
       // Some provider wrappers exit before reading stdin; ignore broken pipe errors.
     });
 
-    proc.on('close', (code) => {
-      clearTimeout(timer);
+    proc.on('close', (code, signal) => {
       const normalizedOutput = isCodexExecJson ? extractCodexFinalMessage(output) : output.trim();
-      resolve({
+      resolveOnce({
         output: normalizedOutput,
         exitCode: code ?? 1,
-        timedOut,
+        timedOut: false,
+        stderr: stderr.trim(),
+        signal,
       });
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({
+      resolveOnce({
         output: '',
         exitCode: 1,
         timedOut: false,
+        stderr: stderr.trim(),
+        error: err.message,
       });
     });
 

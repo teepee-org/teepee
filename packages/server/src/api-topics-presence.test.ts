@@ -54,6 +54,8 @@ function writeConfig(dir: string) {
   fs.mkdirSync(teepeeDir, { recursive: true });
   const configPath = path.join(teepeeDir, 'config.yaml');
   fs.writeFileSync(configPath, `
+version: 1
+mode: shared
 teepee:
   name: topic-test
 providers:
@@ -264,7 +266,7 @@ describe('WebSocket presence events', () => {
     const sid = createSession(db, 'owner@localhost');
     cookie = `teepee_session=${sid}`;
 
-    createUser(db, 'alice@test.com', 'user');
+    createUser(db, 'alice@test.com', 'collaborator');
     const sid2 = createSession(db, 'alice@test.com');
     cookie2 = `teepee_session=${sid2}`;
     db.close();

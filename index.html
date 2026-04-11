@@ -227,15 +227,15 @@
       <p class="callout">
         Use it when “open three terminals and coordinate agents by hand” stops scaling. This is not just chat: Teepee sits on top of a real project, so coding agents can work on the codebase underneath while staying in shared context with humans.
       </p>
-      <div class="install" onclick="navigator.clipboard.writeText('npx teepee-cli serve --insecure')">
-        npx teepee-cli serve --insecure
+      <div class="install" onclick="navigator.clipboard.writeText('npx teepee-cli start')">
+        npx teepee-cli start
         <span class="copy-hint">click to copy</span>
       </div>
       <div class="note">Run this in the root of the project you want Teepee to work on.</div>
       <div class="note">On first run, Teepee creates `.teepee/config.yaml` using the agent CLIs it finds on your machine.</div>
-      <div class="note">Warning: `--insecure` disables sandboxing. Use it only for local evaluation or fully trusted users.</div>
-      <div class="note">For secure or shared use, run `npx teepee-cli start` instead.</div>
-      <div class="note">Prefer a global install? Run `npm install -g teepee-cli`, then use `teepee serve --insecure` for local eval.</div>
+      <div class="note">Set `mode: shared` in `.teepee/config.yaml` before inviting teammates.</div>
+      <div class="note">For stronger isolation, run Teepee inside a dedicated VM or container.</div>
+      <div class="note">Prefer a global install? Run `npm install -g teepee-cli`, then use `teepee start`.</div>
       <div class="note">Requires at least one installed agent CLI, such as Claude, Codex, or Ollama.</div>
       <div class="note">Package: teepee-cli. Installed binary: teepee.</div>
       <div class="links">

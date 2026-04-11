@@ -1,20 +1,35 @@
-import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { useState, useEffect } from 'react';
 import type { Message } from '../types';
+import { fetchMessageArtifacts, type MessageArtifactInfo } from '../api';
+import { ArtifactCard } from './ArtifactCard';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface Props {
   message: Message;
+  highlighted?: boolean;
+  onOpenArtifact?: (artifactId: number, versionId: number) => void;
+  projectPath?: string;
+  onOpenReference?: (href: string) => void;
 }
 
-export function MessageBubble({ message }: Props) {
+export function MessageBubble({ message, highlighted = false, onOpenArtifact, projectPath, onOpenReference }: Props) {
   const [showRaw, setShowRaw] = useState(false);
+  const [artifacts, setArtifacts] = useState<MessageArtifactInfo[]>([]);
   const isSystem = message.author_type === 'system';
   const isAgent = message.author_type === 'agent';
   const isRichSystem = isSystem && message.body.includes('\n');
 
+  useEffect(() => {
+    if (isAgent && message.id > 0) {
+      fetchMessageArtifacts(message.id).then(setArtifacts).catch(() => {});
+    }
+  }, [message.id, isAgent]);
+
   return (
-    <div className={`message ${message.author_type}${isRichSystem ? ' system-rich' : ''}`}>
+    <div
+      className={`message ${message.author_type}${isRichSystem ? ' system-rich' : ''}${highlighted ? ' highlighted' : ''}`}
+      data-message-id={message.id}
+    >
       <div className="message-header">
         <span className={`author ${message.author_type}`}>
           {isAgent && '🤖 '}
@@ -38,45 +53,22 @@ export function MessageBubble({ message }: Props) {
         {showRaw || (isSystem && !isRichSystem) ? (
           <pre className="raw">{message.body}</pre>
         ) : (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const isBlock = String(children).includes('\n');
-                if (isBlock) {
-                  return (
-                    <div className="code-block">
-                      <div className="code-header">
-                        <span>{match?.[1] || 'code'}</span>
-                        <button
-                          onClick={() =>
-                            navigator.clipboard.writeText(String(children))
-                          }
-                        >
-                          Copy
-                        </button>
-                      </div>
-                      <pre>
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      </pre>
-                    </div>
-                  );
-                }
-                return (
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
-                );
-              },
-            }}
-          >
+          <MarkdownRenderer projectPath={projectPath} onOpenReference={onOpenReference}>
             {message.body}
-          </ReactMarkdown>
+          </MarkdownRenderer>
         )}
       </div>
+      {artifacts.length > 0 && (
+        <div className="message-artifacts">
+          {artifacts.map((a) => (
+            <ArtifactCard
+              key={`${a.artifact_id}-${a.artifact_version_id}`}
+              artifact={a}
+              onOpen={onOpenArtifact ?? (() => {})}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -33,6 +33,8 @@ agents:
     prompt: "./prompts/reviewer.md"
 `);
     const config = loadConfig(file);
+    expect(config.version).toBe(1);
+    expect(config.mode).toBe('private');
     expect(config.teepee.name).toBe('test-project');
     expect(config.teepee.language).toBe('it');
     expect(config.teepee.demo.enabled).toBe(false);
@@ -40,6 +42,54 @@ agents:
     expect(config.providers.claude.timeout_seconds).toBe(60);
     expect(config.agents.coder.provider).toBe('claude');
     expect(config.agents.reviewer.prompt).toBe('./prompts/reviewer.md');
+  });
+
+  it('loads explicit shared mode', () => {
+    const file = tmpConfig(`
+version: 1
+mode: shared
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.version).toBe(1);
+    expect(config.mode).toBe('shared');
+  });
+
+  it('rejects invalid mode', () => {
+    const file = tmpConfig(`
+mode: public
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("mode must be 'private' or 'shared'");
+  });
+
+  it('rejects default_role', () => {
+    const file = tmpConfig(`
+default_role: observer
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow('default_role is not supported');
   });
 
   it('applies default language', () => {
@@ -211,7 +261,7 @@ providers:
     expect(() => loadConfig(file)).toThrow('at least one agent');
   });
 
-  it('rejects invalid security.role_defaults value', () => {
+  it('rejects legacy security.role_defaults', () => {
     const file = tmpConfig(`
 teepee:
   name: test
@@ -225,7 +275,7 @@ agents:
   a:
     provider: p
 `);
-    expect(() => loadConfig(file)).toThrow("must be one of: host, sandbox, disabled (got 'sandbx')");
+    expect(() => loadConfig(file)).toThrow("unknown security key 'role_defaults'");
   });
 
   it('rejects invalid agent capability', () => {
@@ -336,6 +386,257 @@ agents:
     expect(() => loadConfig(file)).toThrow("sandbox.command must be a string");
   });
 
+  it('rejects legacy role_defaults instead of configurable execution modes', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  role_defaults:
+    owner: db_only
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("unknown security key 'role_defaults'");
+  });
+
+  it('rejects unknown security key', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  custom_key: true
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("unknown security key 'custom_key'");
+  });
+
+  it('rejects role_defaults as a legacy security key', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  role_defaults:
+    owner: host
+    superadmin: host
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("unknown security key 'role_defaults'");
+  });
+
+  it('rejects unknown security.sandbox key', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+security:
+  sandbox:
+    runner: bubblewrap
+    network_isolation: true
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("unknown security.sandbox key 'network_isolation'");
+  });
+
+  it('rejects invalid agent chain_policy', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+    chain_policy: auto_chain
+`);
+    expect(() => loadConfig(file)).toThrow("invalid chain_policy 'auto_chain'");
+  });
+
+  it('loads top-level role-agent matrix', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+  b:
+    provider: p
+roles:
+  owner:
+    a: trusted
+    b: readwrite
+  collaborator:
+    a: readwrite
+  observer:
+    b: readonly
+`);
+    const config = loadConfig(file);
+    expect(config.roles.owner).toEqual({ a: 'trusted', b: 'readwrite' });
+    expect(config.roles.collaborator).toEqual({ a: 'readwrite' });
+    expect(config.roles.observer).toEqual({ b: 'readonly' });
+  });
+
+  it('accepts draft as a valid access profile', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+roles:
+  owner:
+    a: trusted
+  collaborator:
+    a: draft
+`);
+    const config = loadConfig(file);
+    expect(config.roles.collaborator).toEqual({ a: 'draft' });
+  });
+
+  it('rejects unknown role names', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+roles:
+  qa:
+    a: readwrite
+`);
+    expect(() => loadConfig(file)).toThrow("unknown roles key 'qa'");
+  });
+
+  it('rejects unknown role profiles', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+roles:
+  owner:
+    a: root
+`);
+    expect(() => loadConfig(file)).toThrow("must be one of: readonly, draft, readwrite, trusted");
+  });
+
+  it('rejects legacy agent profile when roles are present', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+    profile: trusted
+roles:
+  owner:
+    a: trusted
+`);
+    expect(() => loadConfig(file)).toThrow("uses legacy 'profile'");
+  });
+
+  it('rejects custom top-level profiles', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+profiles:
+  semi_trusted:
+    fs: read
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    expect(() => loadConfig(file)).toThrow("custom 'profiles' are not supported");
+  });
+
+  it('loads valid chain_policy', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+    chain_policy: delegate_with_origin_policy
+`);
+    const config = loadConfig(file);
+    expect(config.agents.a.chain_policy).toBe('delegate_with_origin_policy');
+  });
+
+  it('defaults architect chain_policy to delegate_with_origin_policy', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  architect:
+    provider: p
+  coder:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.agents.architect.chain_policy).toBe('delegate_with_origin_policy');
+    expect(config.agents.coder.chain_policy).toBe('delegate_with_origin_policy');
+  });
+
+  it('normalizes legacy restricted profile into readonly roles when roles are absent', () => {
+    const file = tmpConfig(`
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  helper:
+    provider: p
+    profile: restricted
+`);
+    const config = loadConfig(file);
+    expect(config.roles.owner.helper).toBe('readonly');
+    expect(config.roles.collaborator.helper).toBe('readonly');
+  });
+
   it('applies default security config when not specified', () => {
     const file = tmpConfig(`
 teepee:
@@ -348,9 +649,6 @@ agents:
     provider: p
 `);
     const config = loadConfig(file);
-    expect(config.security.role_defaults.owner).toBe('host');
-    expect(config.security.role_defaults.user).toBe('sandbox');
-    expect(config.security.role_defaults.observer).toBe('disabled');
     expect(config.security.sandbox.runner).toBe('bubblewrap');
     expect(config.security.sandbox.empty_home).toBe(true);
     expect(config.security.sandbox.private_tmp).toBe(true);
@@ -360,6 +658,8 @@ agents:
 
 describe('resolveTimeout', () => {
   const config = {
+    version: 1 as const,
+    mode: 'private' as const,
     teepee: {
       name: 'test',
       language: 'en',
@@ -379,6 +679,11 @@ describe('resolveTimeout', () => {
       reviewer: { provider: 'claude' },
       quick: { provider: 'fast' },
     },
+    roles: {
+      owner: { coder: 'trusted' as const, reviewer: 'readwrite' as const, quick: 'readwrite' as const },
+      collaborator: { coder: 'readwrite' as const, reviewer: 'readwrite' as const, quick: 'readwrite' as const },
+      observer: {},
+    },
     limits: {
       max_agents_per_message: 5,
       max_jobs_per_user_per_minute: 10,
@@ -392,7 +697,6 @@ describe('resolveTimeout', () => {
       auth_rate_limit_max_requests: 20,
     },
     security: {
-      role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
       sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
     },
   };

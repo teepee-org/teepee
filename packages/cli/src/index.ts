@@ -10,12 +10,11 @@ import {
   openDb,
   createUser,
   listUsers,
-  setPermission,
   createInviteToken,
   revokeUserFull,
 } from 'teepee-core';
 import { startServer } from 'teepee-server';
-import { isLoopbackHost, parseServeArgs } from './cli-utils.js';
+import { parseServeArgs } from './cli-utils.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -61,17 +60,13 @@ Usage:
   Options:
     --port <port>                 Server port (default: 3000)
     --host <addr>                 Bind address (default: 127.0.0.1)
-    --insecure                    Disable sandbox enforcement (local eval only)
 
   teepee stop                     Stop server
   teepee status                   Show status
 
-  teepee invite <email> [--role user|observer]
+  teepee invite <email> [--role collaborator|observer]
   teepee revoke <email>
   teepee users
-
-  teepee allow <email> tag <agents|*>
-  teepee deny <email> tag <agents|*>
 
   teepee agents                   List configured agents
   teepee version                  Show CLI version
@@ -97,6 +92,13 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
   const detectedProviders: string[] = [];
   const providerLines = ['providers:'];
   const agentLines = ['agents:'];
+  const configuredAgents: string[] = [];
+
+  const addAgent = (agentName: string, providerName: string) => {
+    configuredAgents.push(agentName);
+    agentLines.push(`  ${agentName}:`);
+    agentLines.push(`    provider: ${providerName}`);
+  };
 
   if (hasClaude) {
     detectedProviders.push('claude');
@@ -117,28 +119,21 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
   }
 
   if (hasClaude && hasCodex) {
-    agentLines.push('  coder:');
-    agentLines.push('    provider: claude');
-    agentLines.push('  reviewer:');
-    agentLines.push('    provider: claude');
-    agentLines.push('  architect:');
-    agentLines.push('    provider: codex');
-    agentLines.push('  devops:');
-    agentLines.push('    provider: codex');
+    addAgent('coder', 'claude');
+    addAgent('reviewer', 'claude');
+    addAgent('architect', 'codex');
+    addAgent('devops', 'codex');
   } else if (hasClaude) {
     for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
-      agentLines.push(`  ${agentName}:`);
-      agentLines.push('    provider: claude');
+      addAgent(agentName, 'claude');
     }
   } else if (hasCodex) {
     for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
-      agentLines.push(`  ${agentName}:`);
-      agentLines.push('    provider: codex');
+      addAgent(agentName, 'codex');
     }
   } else if (hasOllama) {
     for (const agentName of ['coder', 'reviewer', 'architect', 'devops']) {
-      agentLines.push(`  ${agentName}:`);
-      agentLines.push('    provider: ollama');
+      addAgent(agentName, 'ollama');
     }
   } else {
     providerLines.push('  # claude:');
@@ -157,7 +152,18 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('  #   provider: codex');
   }
 
+  const roleLines = ['roles:', '  owner:', '  collaborator:', '  observer: {}'];
+  for (const agentName of configuredAgents) {
+    roleLines.splice(roleLines.indexOf('  collaborator:'), 0, `    ${agentName}: ${agentName === 'devops' ? 'trusted' : 'readwrite'}`);
+  }
+  for (const agentName of configuredAgents) {
+    roleLines.splice(roleLines.indexOf('  observer: {}'), 0, `    ${agentName}: readwrite`);
+  }
+
   const template = [
+    'version: 1',
+    'mode: private',
+    '',
     'teepee:',
     `  name: ${projectName}`,
     '  language: en',
@@ -165,6 +171,7 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     ...providerLines,
     '',
     ...agentLines,
+    ...(configuredAgents.length > 0 ? ['', ...roleLines] : []),
     '',
   ].join('\n');
 
@@ -308,7 +315,14 @@ async function showUpdateStatus(forceRefresh = false) {
 switch (command) {
   case 'start':
   case 'serve': {
-    const { port, host, insecure } = parseServeArgs(args);
+    let port: number;
+    let host: string;
+    try {
+      ({ port, host } = parseServeArgs(args));
+    } catch (error: any) {
+      console.error(error.message);
+      process.exit(1);
+    }
 
     ensureDir();
 
@@ -325,30 +339,12 @@ switch (command) {
       if (detectedProviders.includes('ollama')) {
         console.log('Note: the default Ollama command uses qwen2.5-coder:7b. Change the model name if needed.');
       }
-      console.log('Edit it if needed, then run: npx teepee-cli serve --insecure');
-      console.log('If you install teepee-cli globally, you can use: teepee serve --insecure');
-      console.log('For secure/shared deployments, use: teepee start');
+      console.log('Edit it if needed, then run: npx teepee-cli start');
+      console.log('Set mode: shared in .teepee/config.yaml before inviting teammates.');
       break;
     }
 
-    if (insecure) {
-      console.log('');
-      console.log('WARNING: Teepee is running in INSECURE mode.');
-      console.log('Sandboxing is disabled.');
-      console.log('Runnable agents may access files outside the project, including the');
-      console.log("host user's home directory and other readable disk paths.");
-      console.log('Use only for local demos or with users you fully trust.');
-      console.log('Do not expose this mode to untrusted users or public networks.');
-      if (!isLoopbackHost(host)) {
-        console.log('');
-        console.log('DANGER: You are binding to a non-loopback address in insecure mode.');
-        console.log('Any user who can reach this address will have agent access to your');
-        console.log('full readable disk. Only proceed if you trust ALL users on this network.');
-      }
-      console.log('');
-    }
-
-    const { server } = startServer(configPath, port, { host, insecure });
+    const { server } = startServer(configPath, port, { host });
 
     // Save PID
     fs.writeFileSync(pidFile, String(process.pid));
@@ -408,6 +404,7 @@ switch (command) {
     const db = openDb(dbPath);
     const users = listUsers(db);
     console.log(`Teepee: ${config.teepee.name}`);
+    console.log(`Mode: ${config.mode}`);
     console.log(`Agents: ${Object.keys(config.agents).join(', ')}`);
     console.log(`Users: ${users.length}`);
     console.log('Status: running');
@@ -418,13 +415,23 @@ switch (command) {
   case 'invite': {
     const email = args[1];
     if (!email) {
-      console.error('Usage: teepee invite <email> [--role user|observer]');
+      console.error('Usage: teepee invite <email> [--role collaborator|observer]');
       process.exit(1);
     }
     const roleIdx = args.indexOf('--role');
-    const role = roleIdx !== -1 ? args[roleIdx + 1] : 'user';
+    const rawRole = roleIdx !== -1 ? args[roleIdx + 1] : 'collaborator';
+    const role = rawRole === 'user' ? 'collaborator' : rawRole;
+    if (!['collaborator', 'observer'].includes(role)) {
+      console.error(`Invalid invite role: ${rawRole}. Use collaborator or observer`);
+      process.exit(1);
+    }
 
     ensureDir();
+    const config = loadConfig(configPath);
+    if (config.mode !== 'shared') {
+      console.error('Invites are only available when .teepee/config.yaml has mode: shared');
+      process.exit(1);
+    }
     const db = openDb(dbPath);
     try {
       createUser(db, email, role);
@@ -475,22 +482,8 @@ switch (command) {
 
   case 'allow':
   case 'deny': {
-    const email = args[1];
-    const tagKeyword = args[2]; // 'tag'
-    const agents = args[3];
-    if (!email || tagKeyword !== 'tag' || !agents) {
-      console.error(`Usage: teepee ${command} <email> tag <agents|*>`);
-      process.exit(1);
-    }
-    const allowed = command === 'allow';
-    ensureDir();
-    const db = openDb(dbPath);
-    const agentList = agents === '*' ? ['*'] : agents.split(',');
-    for (const agent of agentList) {
-      setPermission(db, email, null, agent.trim(), allowed);
-      console.log(`${command}: ${email} tag ${agent.trim()}`);
-    }
-    db.close();
+    console.error(`teepee ${command} is deprecated. Agent access is now configured in .teepee/config.yaml under roles.`);
+    process.exit(1);
     break;
   }
 

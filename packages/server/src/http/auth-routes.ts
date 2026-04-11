@@ -46,7 +46,11 @@ export function handleAuthRoute(
   if (url.pathname === '/auth/session' && req.method === 'GET') {
     const user = authenticateRequest(ctx.db, req);
     if (user) {
-      json({ email: user.email, handle: user.handle, role: user.role });
+      if (ctx.config.mode === 'private' && user.role !== 'owner') {
+        json({ error: 'Private mode is owner-only' }, 403);
+        return true;
+      }
+      json({ id: user.id, email: user.email, handle: user.handle, role: user.role });
     } else {
       json({ error: 'Not authenticated' }, 401);
     }
@@ -55,6 +59,10 @@ export function handleAuthRoute(
 
   // GET /auth/invite/:token
   if (url.pathname.match(/^\/auth\/invite\/[a-f0-9]+$/) && req.method === 'GET') {
+    if (ctx.config.mode !== 'shared') {
+      json({ valid: false, error: 'Invites are only available in shared mode' }, 403);
+      return true;
+    }
     if (!rateLimitAuth(ctx.config, req, res, 'invite:validate')) return true;
     const token = url.pathname.split('/')[3];
     const result = validateToken(ctx.db, token);
@@ -68,6 +76,10 @@ export function handleAuthRoute(
 
   // POST /auth/invite/accept
   if (url.pathname === '/auth/invite/accept' && req.method === 'POST') {
+    if (ctx.config.mode !== 'shared') {
+      json({ error: 'Invites are only available in shared mode' }, 403);
+      return true;
+    }
     if (!rateLimitAuth(ctx.config, req, res, 'invite:accept')) return true;
     readBody(req).then((body) => {
       try {
@@ -76,7 +88,7 @@ export function handleAuthRoute(
           req.headers['user-agent'], getClientIp(ctx.config, req));
         if (result.ok) {
           setSessionCookie(ctx.config, req, res, result.sessionId!);
-          json({ email: result.user?.email, handle: result.user?.handle, role: result.user?.role });
+          json({ id: result.user?.id, email: result.user?.email, handle: result.user?.handle, role: result.user?.role });
         } else {
           json({ error: result.error }, 400);
         }

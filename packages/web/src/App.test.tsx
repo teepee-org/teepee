@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import { App } from './App';
 
 // jsdom doesn't implement scrollIntoView
@@ -11,20 +11,26 @@ const MOCK_TOPICS = [
   { id: 1, name: 'test-topic', language: null, parent_topic_id: null, sort_order: 1, archived: 0, archived_at: null },
 ];
 const MOCK_AGENTS = [{ name: 'coder', provider: 'echo' }];
-const MOCK_PROJECT = { name: 'test', path: '/tmp', language: 'en', gitBranch: 'main', securityMode: 'secure', bindHost: '127.0.0.1', demo: { enabled: false, topic_name: '', hotkey: 'F1', delay_ms: 1200 } };
-const MOCK_PROJECT_INSECURE = { ...MOCK_PROJECT, securityMode: 'insecure' };
+const MOCK_PROJECT = { name: 'test', path: '/tmp', language: 'en', gitBranch: 'main', mode: 'private', bindHost: '127.0.0.1', demo: { enabled: false, topic_name: '', hotkey: 'F1', delay_ms: 1200 } };
 const MOCK_MESSAGES = [
   { id: 1, topic_id: 1, author_type: 'user', author_name: 'owner', body: 'hello', created_at: '2026-01-01T00:00:00Z' },
 ];
+const MOCK_INPUT_REQUESTS: any[] = [];
 const MOCK_PRESENCE = [
   { sessionId: 's1', displayName: 'alice', role: 'owner', activeTopicId: 1, state: 'active', lastSeenAt: '2026-01-01T00:00:00Z' },
-  { sessionId: 's2', displayName: 'bob', role: 'user', activeTopicId: null, state: 'idle', lastSeenAt: '2026-01-01T00:00:00Z' },
+  { sessionId: 's2', displayName: 'bob', role: 'collaborator', activeTopicId: null, state: 'idle', lastSeenAt: '2026-01-01T00:00:00Z' },
 ];
 
 let wsSendSpy: ReturnType<typeof vi.fn>;
 
+afterEach(() => {
+  cleanup();
+});
+
 beforeEach(() => {
   wsSendSpy = vi.fn();
+  localStorage.clear();
+  MOCK_INPUT_REQUESTS.splice(0, MOCK_INPUT_REQUESTS.length);
 
   // Mock WebSocket
   const MockWS = vi.fn().mockImplementation(() => {
@@ -50,6 +56,12 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
     if (url.includes('/auth/session')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SESSION) });
+    }
+    if (url.includes('/input-requests')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_INPUT_REQUESTS) });
+    }
+    if (url.includes('/artifacts')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     }
     if (url.includes('/api/topics') && !url.includes('messages')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_TOPICS) });
@@ -203,6 +215,67 @@ describe('Mobile sidebar drawer state', () => {
   });
 });
 
+describe('Search activity view', () => {
+  it('opens search as a dedicated sidebar view from the activity bar', async () => {
+    await renderApp();
+
+    expect(screen.queryByPlaceholderText('Search topics and messages')).toBeNull();
+
+    const searchActivityButton = screen
+      .getAllByRole('button', { name: 'Search' })
+      .find((button) => button.classList.contains('activity-bar-icon'));
+    expect(searchActivityButton).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(searchActivityButton!);
+    });
+
+    expect(screen.getByPlaceholderText('Search topics and messages')).toBeTruthy();
+    expect(document.querySelector('.topic-list')).toBeNull();
+  });
+});
+
+describe('Human input cards', () => {
+  it('does not render answered checkpoints from topic history as active cards', async () => {
+    MOCK_INPUT_REQUESTS.splice(0, MOCK_INPUT_REQUESTS.length, {
+      requestId: 7,
+      jobId: 11,
+      topicId: 1,
+      agentName: 'architect',
+      requestedByUserId: 'usr_owner',
+      requestedByHandle: 'owner',
+      requestedByMessageId: 21,
+      requestKey: 'doc_choice',
+      status: 'answered',
+      title: 'Quale doc vuoi che approfondisca?',
+      kind: 'single_select',
+      prompt: 'Scegli quale documento di Teepee vuoi che approfondisca prima di procedere.',
+      required: true,
+      allowComment: false,
+      options: [
+        { id: 'documents', label: 'Gestione documenti' },
+        { id: 'checkpoint', label: 'Gestione checkpoint' },
+      ],
+      response: { value: 'checkpoint' },
+      answeredByUserId: 'usr_owner',
+      answeredByHandle: 'owner',
+      answeredAt: '2026-01-01T00:01:00.000Z',
+      expiresAt: '2026-01-01T00:10:00.000Z',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    const input = await openTopicAndGetInput();
+    expect(input).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.queryByText('Quale doc vuoi che approfondisca?')).toBeNull();
+      expect(screen.queryByText(/Risposta registrata:/)).toBeNull();
+      expect(screen.queryByText(/Scegli quale documento di Teepee vuoi che approfondisca/)).toBeNull();
+    });
+  });
+});
+
 // Helper: open a topic and return the input element
 async function openTopicAndGetInput() {
   await renderApp();
@@ -330,39 +403,9 @@ describe('Online now panel', () => {
   });
 });
 
-describe('Insecure mode banner', () => {
-  it('does not show insecure banner in secure mode', async () => {
+describe('Project mode', () => {
+  it('loads private mode without an insecure banner', async () => {
     await renderApp();
     expect(document.querySelector('.insecure-banner')).toBeNull();
-  });
-
-  it('shows insecure banner when securityMode is insecure', async () => {
-    // Override fetch to return insecure project
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/auth/session')) {
-        return Promise.resolve({ json: () => Promise.resolve(MOCK_SESSION) });
-      }
-      if (url.includes('/api/topics') && !url.includes('messages')) {
-        return Promise.resolve({ json: () => Promise.resolve(MOCK_TOPICS) });
-      }
-      if (url.includes('/api/agents')) {
-        return Promise.resolve({ json: () => Promise.resolve(MOCK_AGENTS) });
-      }
-      if (url.includes('/api/project')) {
-        return Promise.resolve({ json: () => Promise.resolve(MOCK_PROJECT_INSECURE) });
-      }
-      if (url.includes('/api/users')) {
-        return Promise.resolve({ json: () => Promise.resolve([MOCK_SESSION]) });
-      }
-      if (url.includes('/messages')) {
-        return Promise.resolve({ json: () => Promise.resolve(MOCK_MESSAGES) });
-      }
-      return Promise.resolve({ json: () => Promise.resolve({}) });
-    }));
-
-    await renderApp();
-    const banner = document.querySelector('.insecure-banner');
-    expect(banner).toBeTruthy();
-    expect(banner!.textContent).toContain('INSECURE MODE');
   });
 });

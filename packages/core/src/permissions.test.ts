@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { openDb, createUser, activateUser, setPermission } from './db.js';
-import { canTag, checkRateLimit, filterAllowedAgents } from './permissions.js';
+import { openDb, createUser, activateUser } from './db.js';
+import { canTag, checkRateLimit, filterAllowedAgents, resolveUserAgentProfile } from './permissions.js';
+import {
+  promoteToOwner,
+  demoteFromOwner,
+  countOwners,
+  revokeUserFull,
+  deleteUserPermanently,
+} from './auth.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import type { LimitsConfig } from './config.js';
+import type { LimitsConfig, TeepeeConfig } from './config.js';
 
 const LIMITS: LimitsConfig = {
   max_agents_per_message: 5,
@@ -13,6 +20,25 @@ const LIMITS: LimitsConfig = {
 
 let db: DatabaseType;
 
+function makeConfig(roles: TeepeeConfig['roles']): TeepeeConfig {
+  return {
+    version: 1,
+    mode: 'private',
+    teepee: { name: 'test', language: 'en', demo: { enabled: false, topic_name: 'demo', hotkey: 'F1', delay_ms: 1200 } },
+    server: { trust_proxy: false, cors_allowed_origins: [], auth_rate_limit_window_seconds: 60, auth_rate_limit_max_requests: 20 },
+    providers: { echo: { command: 'echo ok' } },
+    agents: {
+      coder: { provider: 'echo' },
+      reviewer: { provider: 'echo' },
+      deployer: { provider: 'echo' },
+      architect: { provider: 'echo' },
+    },
+    roles,
+    limits: LIMITS,
+    security: { sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] } },
+  };
+}
+
 beforeEach(() => {
   db = openDb(':memory:');
 
@@ -20,8 +46,8 @@ beforeEach(() => {
   createUser(db, 'owner@test.com', 'owner');
   activateUser(db, 'owner@test.com', 'owner');
 
-  // Create member (role is 'user' but we need 'member' for compat)
-  createUser(db, 'member@test.com', 'user');
+  // Create collaborator
+  createUser(db, 'member@test.com', 'collaborator');
   activateUser(db, 'member@test.com', 'alice');
 
   // Create observer
@@ -30,68 +56,168 @@ beforeEach(() => {
 });
 
 describe('canTag', () => {
-  it('owner always allowed', () => {
-    expect(canTag(db, 'owner@test.com', 'coder', null)).toBe(true);
+  it('owner allowed when the role-agent matrix maps the agent', () => {
+    const config = makeConfig({ owner: { coder: 'trusted' }, collaborator: {}, observer: {} });
+    expect(canTag(db, 'owner@test.com', 'coder', null, config)).toBe(true);
+    expect(resolveUserAgentProfile(db, 'owner@test.com', 'coder', config)).toBe('trusted');
   });
 
-  it('observer always denied', () => {
-    expect(canTag(db, 'observer@test.com', 'coder', null)).toBe(false);
+  it('observer denied when the role-agent matrix omits the agent', () => {
+    const config = makeConfig({ owner: { coder: 'trusted' }, collaborator: {}, observer: {} });
+    expect(canTag(db, 'observer@test.com', 'coder', null, config)).toBe(false);
   });
 
-  it('member denied by default (no rules)', () => {
-    expect(canTag(db, 'member@test.com', 'coder', null)).toBe(false);
+  it('collaborator denied by default when no mapping exists', () => {
+    const config = makeConfig({ owner: {}, collaborator: {}, observer: {} });
+    expect(canTag(db, 'member@test.com', 'coder', null, config)).toBe(false);
   });
 
-  it('member allowed with allow wildcard', () => {
-    setPermission(db, 'member@test.com', null, '*', true);
-    expect(canTag(db, 'member@test.com', 'coder', null)).toBe(true);
-    expect(canTag(db, 'member@test.com', 'reviewer', null)).toBe(true);
+  it('collaborator allowed for readwrite mappings', () => {
+    const config = makeConfig({ owner: {}, collaborator: { coder: 'readwrite', reviewer: 'readonly' }, observer: {} });
+    expect(canTag(db, 'member@test.com', 'coder', null, config)).toBe(true);
+    expect(canTag(db, 'member@test.com', 'reviewer', null, config)).toBe(true);
+    expect(resolveUserAgentProfile(db, 'member@test.com', 'reviewer', config)).toBe('readonly');
   });
 
-  it('member allowed with specific agent allow', () => {
-    setPermission(db, 'member@test.com', null, 'coder', true);
-    expect(canTag(db, 'member@test.com', 'coder', null)).toBe(true);
-    expect(canTag(db, 'member@test.com', 'reviewer', null)).toBe(false);
-  });
-
-  it('deny specific beats allow wildcard', () => {
-    setPermission(db, 'member@test.com', null, '*', true);
-    setPermission(db, 'member@test.com', null, 'coder', false);
-    expect(canTag(db, 'member@test.com', 'coder', null)).toBe(false);
-    expect(canTag(db, 'member@test.com', 'reviewer', null)).toBe(true);
-  });
-
-  it('deny global beats allow topic', () => {
-    setPermission(db, 'member@test.com', null, 'coder', false); // global deny
-    setPermission(db, 'member@test.com', 1, 'coder', true); // topic allow
-    expect(canTag(db, 'member@test.com', 'coder', 1)).toBe(false);
+  it('trusted is controlled by the role-agent matrix, not hardcoded owner-only', () => {
+    const config = makeConfig({ owner: {}, collaborator: { deployer: 'trusted' }, observer: {} });
+    expect(canTag(db, 'member@test.com', 'deployer', null, config)).toBe(true);
+    expect(resolveUserAgentProfile(db, 'member@test.com', 'deployer', config)).toBe('trusted');
   });
 
   it('unknown user denied', () => {
-    expect(canTag(db, 'unknown@test.com', 'coder', null)).toBe(false);
+    const config = makeConfig({ owner: { coder: 'trusted' }, collaborator: { coder: 'readwrite' }, observer: {} });
+    expect(canTag(db, 'unknown@test.com', 'coder', null, config)).toBe(false);
   });
 
   it('revoked user denied', () => {
+    const config = makeConfig({ owner: {}, collaborator: { coder: 'readwrite' }, observer: {} });
     db.prepare("UPDATE users SET status = 'revoked' WHERE email = ?").run(
       'member@test.com'
     );
-    setPermission(db, 'member@test.com', null, '*', true);
-    expect(canTag(db, 'member@test.com', 'coder', null)).toBe(false);
+    expect(canTag(db, 'member@test.com', 'coder', null, config)).toBe(false);
   });
 });
 
 describe('filterAllowedAgents', () => {
-  it('filters by permission', () => {
-    setPermission(db, 'member@test.com', null, 'coder', true);
+  it('filters by role-agent matrix and returns effective profiles', () => {
+    const config = makeConfig({ owner: {}, collaborator: { coder: 'readwrite' }, observer: {} });
     const result = filterAllowedAgents(
       db,
       'member@test.com',
       ['coder', 'reviewer'],
       1,
-      LIMITS
+      LIMITS,
+      config
     );
     expect(result.allowed).toEqual(['coder']);
     expect(result.denied).toEqual(['reviewer']);
     expect(result.rateLimited).toBe(false);
+    expect(result.profiles).toEqual({ coder: 'readwrite' });
+  });
+
+  it('keeps trusted when the collaborator role explicitly grants it', () => {
+    const config = makeConfig({ owner: {}, collaborator: { coder: 'readwrite', deployer: 'trusted' }, observer: {} });
+    const result = filterAllowedAgents(
+      db,
+      'member@test.com',
+      ['coder', 'deployer'],
+      1,
+      LIMITS,
+      config
+    );
+    expect(result.allowed).toEqual(['coder', 'deployer']);
+    expect(result.denied).toEqual([]);
+    expect(result.profiles).toEqual({ coder: 'readwrite', deployer: 'trusted' });
+  });
+});
+
+describe('multi-owner', () => {
+  it('countOwners returns correct count', () => {
+    expect(countOwners(db)).toBe(1);
+  });
+
+  it('promote collaborator to owner', () => {
+    const result = promoteToOwner(db, 'member@test.com');
+    expect(result.ok).toBe(true);
+    expect(countOwners(db)).toBe(2);
+  });
+
+  it('cannot promote already-owner', () => {
+    const result = promoteToOwner(db, 'owner@test.com');
+    expect(result.ok).toBe(false);
+  });
+
+  it('cannot promote non-active user', () => {
+    createUser(db, 'pending@test.com', 'collaborator');
+    const result = promoteToOwner(db, 'pending@test.com');
+    expect(result.ok).toBe(false);
+  });
+
+  it('demote owner to collaborator', () => {
+    promoteToOwner(db, 'member@test.com');
+    expect(countOwners(db)).toBe(2);
+    const result = demoteFromOwner(db, 'owner@test.com');
+    expect(result.ok).toBe(true);
+    expect(countOwners(db)).toBe(1);
+  });
+
+  it('cannot demote last owner', () => {
+    const result = demoteFromOwner(db, 'owner@test.com');
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('last owner');
+  });
+
+  it('cannot revoke last owner', () => {
+    const result = revokeUserFull(db, 'owner@test.com');
+    expect(result).toBe(false);
+  });
+
+  it('can revoke non-last owner', () => {
+    promoteToOwner(db, 'member@test.com');
+    const result = revokeUserFull(db, 'owner@test.com');
+    expect(result).toBe(true);
+  });
+
+  it('cannot revoke the only remaining active owner when another owner is revoked', () => {
+    promoteToOwner(db, 'member@test.com');
+    expect(revokeUserFull(db, 'owner@test.com')).toBe(true);
+    expect(countOwners(db)).toBe(1);
+    expect(revokeUserFull(db, 'member@test.com')).toBe(false);
+    expect(countOwners(db)).toBe(1);
+  });
+
+  it('cannot delete last owner', () => {
+    const result = deleteUserPermanently(db, 'owner@test.com');
+    expect(result).toBe(false);
+  });
+
+  it('can delete non-last owner', () => {
+    promoteToOwner(db, 'member@test.com');
+    const result = deleteUserPermanently(db, 'owner@test.com');
+    expect(result).toBe(true);
+  });
+
+  it('can delete a revoked owner without counting it as active owner coverage', () => {
+    promoteToOwner(db, 'member@test.com');
+    expect(revokeUserFull(db, 'owner@test.com')).toBe(true);
+    expect(deleteUserPermanently(db, 'owner@test.com')).toBe(true);
+    expect(countOwners(db)).toBe(1);
+  });
+
+  it('cannot delete the only remaining active owner when another owner is revoked', () => {
+    promoteToOwner(db, 'member@test.com');
+    expect(revokeUserFull(db, 'owner@test.com')).toBe(true);
+    expect(deleteUserPermanently(db, 'member@test.com')).toBe(false);
+    expect(countOwners(db)).toBe(1);
+  });
+
+  it('writes audit events for owner promotion and demotion', () => {
+    expect(promoteToOwner(db, 'member@test.com', 'owner@test.com').ok).toBe(true);
+    expect(demoteFromOwner(db, 'member@test.com', 'owner@test.com').ok).toBe(true);
+
+    const events = db.prepare("SELECT kind, payload FROM events WHERE kind LIKE 'user.owner_%' ORDER BY id").all() as any[];
+    expect(events.map((event) => event.kind)).toEqual(['user.owner_promoted', 'user.owner_demoted']);
+    expect(JSON.parse(events[0].payload).actor_email).toBe('owner@test.com');
   });
 });

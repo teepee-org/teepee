@@ -68,8 +68,13 @@ export class BubblewrapRunner extends SandboxRunner {
     // Minimal /dev
     bwrapArgs.push('--dev', '/dev');
 
-    // Project root — read-write at /workspace
-    bwrapArgs.push('--bind', options.projectRoot, '/workspace');
+    // Project root at /workspace. readonly profile uses a read-only bind.
+    bwrapArgs.push(options.readOnlyProject ? '--ro-bind' : '--bind', options.projectRoot, '/workspace');
+
+    // Per-job output directory (rw)
+    if (options.outputDir) {
+      bwrapArgs.push('--bind', options.outputDir, '/teepee-out');
+    }
 
     // Private tmp
     if (options.privateTmp) {
@@ -102,6 +107,9 @@ export class BubblewrapRunner extends SandboxRunner {
       LANG: 'C.UTF-8',
       TERM: 'dumb',
     };
+    if (options.outputDir) {
+      env.TEEPEE_OUTPUT_DIR = '/teepee-out';
+    }
     for (const key of options.forwardEnv) {
       if (process.env[key] !== undefined) {
         env[key] = process.env[key]!;

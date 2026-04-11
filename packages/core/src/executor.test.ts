@@ -105,6 +105,22 @@ describe('runAgent', () => {
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  it('does not run db_only as an executor mode', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-db-only-executor-test-'));
+    const result = await runAgent({
+      command: 'node -e "console.log(\'should not run\')"',
+      context: 'context',
+      timeoutMs: 5000,
+      cwd: tmpDir,
+      executionMode: 'db_only',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("unknown execution mode 'db_only'");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe('buildContext', () => {
@@ -116,6 +132,8 @@ describe('buildContext', () => {
     const messageId = insertMessage(db, topicId, 'user', 'owner', '@coder presentati');
 
     const config = {
+      version: 1 as const,
+      mode: 'private' as const,
       teepee: {
         name: 'test',
         language: 'it',
@@ -144,8 +162,8 @@ describe('buildContext', () => {
         max_chain_depth: 2,
         max_total_jobs_per_chain: 10,
       },
+      roles: { owner: { coder: 'readwrite' as const }, collaborator: { coder: 'readwrite' as const }, observer: {} },
       security: {
-        role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
         sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
       },
     };
@@ -180,6 +198,8 @@ describe('buildContext', () => {
     );
 
     const config = {
+      version: 1 as const,
+      mode: 'private' as const,
       teepee: {
         name: 'test',
         language: 'it',
@@ -208,8 +228,8 @@ describe('buildContext', () => {
         max_chain_depth: 2,
         max_total_jobs_per_chain: 10,
       },
+      roles: { owner: { coder: 'readwrite' as const }, collaborator: { coder: 'readwrite' as const }, observer: {} },
       security: {
-        role_defaults: { owner: 'host' as const, user: 'sandbox' as const, observer: 'disabled' as const },
         sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
       },
     };
@@ -221,6 +241,64 @@ describe('buildContext', () => {
     expect(currentSection).not.toContain('@coder ');
     expect(currentSection).not.toContain('@architect');
     expect(currentSection).toContain('"@reviewer"');
+
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('includes the lazy artifact read workflow when artifact access is enabled', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-context-artifact-test-'));
+    const dbPath = path.join(tmpDir, 'db.sqlite');
+    const db = openDb(dbPath);
+    const topicId = createTopic(db, 'test');
+    const messageId = insertMessage(db, topicId, 'user', 'owner', '@coder aggiorna il documento');
+
+    const config = {
+      version: 1 as const,
+      mode: 'private' as const,
+      teepee: {
+        name: 'test',
+        language: 'it',
+        demo: {
+          enabled: false,
+          topic_name: 'hn-live-demo',
+          hotkey: 'F1',
+          delay_ms: 1200,
+        },
+      },
+      server: {
+        trust_proxy: false,
+        cors_allowed_origins: [],
+        auth_rate_limit_window_seconds: 60,
+        auth_rate_limit_max_requests: 20,
+      },
+      providers: {
+        claude: { command: 'echo' },
+      },
+      agents: {
+        coder: { provider: 'claude' },
+      },
+      limits: {
+        max_agents_per_message: 5,
+        max_jobs_per_user_per_minute: 10,
+        max_chain_depth: 2,
+        max_total_jobs_per_chain: 10,
+      },
+      roles: { owner: { coder: 'readwrite' as const }, collaborator: { coder: 'readwrite' as const }, observer: {} },
+      security: {
+        sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
+      },
+    };
+
+    const context = buildContext(db, 'coder', topicId, messageId, 'it', config, tmpDir, [
+      { id: 2, kind: 'report', title: "Che cos'e Teepee", current_version: 2 },
+    ]);
+
+    expect(context).toContain('[artifacts/v2]');
+    expect(context).toContain('Artifact content access is lazy');
+    expect(context).toContain('For any existing document edit, use this workflow: read-current on the target artifact');
+    expect(context).toContain('Prefer base_version: "current" after read-current');
+    expect(context).toContain("Use 'update' when history is only reference material. Use 'rewrite-from-version' when the requested content must be materially derived from a historical version");
 
     db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });

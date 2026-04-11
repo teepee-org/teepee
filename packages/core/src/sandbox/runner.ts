@@ -3,6 +3,8 @@ import type { ChildProcess } from 'child_process';
 export interface SandboxOptions {
   /** Project root to mount read-write inside the sandbox. */
   projectRoot: string;
+  /** Mount the project root read-only. */
+  readOnlyProject?: boolean;
   /** Whether to provide an empty home directory. */
   emptyHome: boolean;
   /** Whether to provide a private /tmp. */
@@ -13,6 +15,8 @@ export interface SandboxOptions {
   containerImage?: string;
   /** Command to run inside the container (container backend only). */
   containerCommand?: string;
+  /** Host path for the per-job output directory, mounted rw at /teepee-out inside the sandbox. */
+  outputDir?: string;
 }
 
 /**

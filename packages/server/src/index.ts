@@ -7,6 +7,7 @@ import {
   loadConfig,
   openDb,
   getMessages,
+  expirePendingJobInputRequests,
   Orchestrator,
   ensureOwner,
   runMigrations,
@@ -23,7 +24,6 @@ export type { ServerContext, ClientState } from './context.js';
 
 export interface StartServerOptions {
   host?: string;
-  insecure?: boolean;
   idleThresholdMs?: number;
   idleCheckIntervalMs?: number;
 }
@@ -34,13 +34,17 @@ export function startServer(
   options: StartServerOptions = {}
 ): { server: http.Server; close: () => void } {
   const bindHost = options.host || '127.0.0.1';
-  const insecure = options.insecure || false;
   const idleThresholdMs = options.idleThresholdMs ?? 90_000;
   const idleCheckIntervalMs = options.idleCheckIntervalMs ?? 15_000;
   const config = loadConfig(configPath);
   const teepeeDir = path.dirname(path.resolve(configPath));
   const basePath = path.dirname(teepeeDir);
   const dbPath = path.join(teepeeDir, 'db.sqlite');
+  const isLoopback = bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
+
+  if (config.mode === 'private' && !isLoopback) {
+    throw new Error("Private mode can only bind to a loopback host. Set mode: shared in .teepee/config.yaml for network access.");
+  }
 
   if (!fs.existsSync(teepeeDir)) {
     fs.mkdirSync(teepeeDir, { recursive: true });
@@ -79,6 +83,15 @@ export function startServer(
     onJobStream(topicId, jobId, chunk) {
       broadcast(topicId, { type: 'message.stream', topicId, jobId, chunk });
     },
+    onJobRetrying(topicId, jobId, agentName, attempt, error) {
+      broadcast(topicId, { type: 'agent.job.retrying', topicId, jobId, agentName, attempt, error });
+    },
+    onJobWaitingInput(topicId, jobId, agentName, request) {
+      broadcast(topicId, { type: 'agent.job.waiting_input', topicId, jobId, agentName, request });
+    },
+    onJobResumed(topicId, jobId, agentName, requestId, answeredByUserId) {
+      broadcast(topicId, { type: 'agent.job.resumed', topicId, jobId, agentName, requestId, answeredByUserId });
+    },
     onJobCompleted(topicId, jobId, agentName, messageId) {
       const msgs = getMessages(db, topicId, 1);
       const msg = msgs.find((m) => m.id === messageId);
@@ -92,7 +105,7 @@ export function startServer(
     },
   };
 
-  const orchestrator = new Orchestrator(db, config, basePath, callbacks, { insecure });
+  const orchestrator = new Orchestrator(db, config, basePath, callbacks);
 
   function getPresenceSnapshotFn() {
     const now = Date.now();
@@ -115,7 +128,7 @@ export function startServer(
 
   const ctx: ServerContext = {
     config, db, basePath, port, ownerEmail, ownerSecret, orchestrator, clients, broadcast, broadcastGlobal,
-    insecure, bindHost,
+    bindHost,
     getPresenceSnapshot: getPresenceSnapshotFn,
   };
 
@@ -138,6 +151,10 @@ export function startServer(
       const currentUser = authenticateRequest(db, req);
       if (!currentUser) {
         jsonResponse(res, { error: 'Not authenticated' }, 401);
+        return;
+      }
+      if (config.mode === 'private' && currentUser.role !== 'owner') {
+        jsonResponse(res, { error: 'Private mode is owner-only' }, 403);
         return;
       }
       if (handleApiRoute(ctx, req, res, url, currentUser)) return;
@@ -168,7 +185,24 @@ export function startServer(
     }
   }, idleCheckIntervalMs);
 
-  const isLoopback = bindHost === '127.0.0.1' || bindHost === 'localhost' || bindHost === '::1';
+  const inputExpiryInterval = setInterval(() => {
+    const expired = expirePendingJobInputRequests(db);
+    for (const item of expired) {
+      broadcast(item.topicId, {
+        type: 'job.input.expired',
+        topicId: item.topicId,
+        jobId: item.jobId,
+        requestId: item.requestId,
+      });
+      broadcast(item.topicId, {
+        type: 'agent.job.failed',
+        topicId: item.topicId,
+        jobId: item.jobId,
+        agentName: item.agentName,
+        error: 'User input request expired before answer',
+      });
+    }
+  }, 15_000);
 
   server.listen(port, bindHost, () => {
     console.log(`\nTeepee started:\n`);
@@ -187,16 +221,14 @@ export function startServer(
       }
     }
     console.log(`\n  Project: ${config.teepee.name}`);
+    console.log(`  Mode:    ${config.mode}`);
     console.log(`  Agents:  ${Object.keys(config.agents).join(', ')}`);
-    if (insecure) {
-      console.log(`  Mode:    INSECURE (sandbox disabled)`);
-    }
     console.log(`\n  Open the owner login link to get started.`);
     console.log(`  The secret changes on every restart.\n`);
   });
 
   return {
     server,
-    close: () => { clearInterval(idleCheckInterval); wss.close(); server.close(); db.close(); },
+    close: () => { clearInterval(idleCheckInterval); clearInterval(inputExpiryInterval); wss.close(); server.close(); db.close(); },
   };
 }

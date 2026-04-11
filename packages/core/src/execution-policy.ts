@@ -1,85 +1,48 @@
-import type { ExecutionMode, AgentCapability, SecurityConfig } from './config.js';
-import type { UserRole } from './commands/types.js';
+import type { ExecutionMode, AgentAccessProfile } from './config.js';
 
 export interface PolicyResult {
   mode: ExecutionMode;
   reason: string;
-}
-
-const VALID_MODES = new Set<string>(['host', 'sandbox', 'disabled']);
-
-/**
- * Runtime guard: ensure a mode string is a valid ExecutionMode.
- * Unknown values fail closed to 'disabled' — never to 'host'.
- */
-function safeMode(mode: string | undefined): ExecutionMode {
-  if (mode && VALID_MODES.has(mode)) return mode as ExecutionMode;
-  return 'disabled';
+  sandboxReadOnly: boolean;
+  canWriteArtifacts: boolean;
 }
 
 /**
  * Resolve the effective execution mode for a job.
  *
- * effective_mode = min(requester_default, agent_capability)
+ * Profile-based resolution:
+ *   readonly  -> sandbox with read-only codebase mount
+ *   readwrite -> sandbox with read-write codebase mount
+ *   trusted   -> host read-write, outside the codebase sandbox
  *
- * Where the ordering is: host > sandbox > disabled.
- * The stricter (lower) of the two wins.
+ * Role checks happen before this function via roles[role][agent].
  */
 export function resolveExecutionPolicy(
-  requesterRole: UserRole,
-  agentCapability: AgentCapability | undefined,
-  security: SecurityConfig
+  profile: AgentAccessProfile | null | undefined
 ): PolicyResult {
-  const capability = agentCapability ?? 'host_allowed';
-
-  // Agent is disabled entirely
-  if (capability === 'disabled') {
-    return { mode: 'disabled', reason: 'agent is disabled' };
+  if (!profile) {
+    return { mode: 'disabled', reason: 'agent is not mapped for the requester role', sandboxReadOnly: false, canWriteArtifacts: false };
   }
 
-  // Resolve requester default from role — fail closed on unknown values
-  const rawDefault = security.role_defaults[requesterRole];
-  const roleDefault = safeMode(rawDefault);
-
-  // If the stored value was invalid, report it
-  if (rawDefault !== roleDefault) {
-    return { mode: 'disabled', reason: `role '${requesterRole}' has invalid mode '${rawDefault}', failing closed` };
+  if (profile === 'readonly') {
+    return { mode: 'sandbox', reason: "profile 'readonly' uses a read-only codebase sandbox", sandboxReadOnly: true, canWriteArtifacts: false };
   }
 
-  // Observer is always disabled
-  if (roleDefault === 'disabled') {
-    return { mode: 'disabled', reason: `role '${requesterRole}' is disabled` };
+  if (profile === 'draft') {
+    return { mode: 'sandbox', reason: "profile 'draft' uses a read-only codebase sandbox with artifact write", sandboxReadOnly: true, canWriteArtifacts: true };
   }
 
-  // Agent is sandbox_only — always sandbox regardless of requester
-  if (capability === 'sandbox_only') {
-    return { mode: 'sandbox', reason: 'agent is sandbox_only' };
+  if (profile === 'readwrite') {
+    return { mode: 'sandbox', reason: "profile 'readwrite' uses a read-write codebase sandbox", sandboxReadOnly: false, canWriteArtifacts: true };
   }
 
-  // capability === 'host_allowed': follow requester default
-  return { mode: roleDefault, reason: `role '${requesterRole}' defaults to '${roleDefault}'` };
+  if (profile === 'trusted') {
+    return { mode: 'host', reason: "profile 'trusted' uses host filesystem access", sandboxReadOnly: false, canWriteArtifacts: true };
+  }
+
+  return { mode: 'disabled', reason: `unknown profile '${profile}', failing closed`, sandboxReadOnly: false, canWriteArtifacts: false };
 }
 
-/**
- * Apply insecure-mode override to a resolved policy.
- *
- * In insecure mode:
- * - 'sandbox' is promoted to 'host' (sandbox enforcement disabled)
- * - 'host' stays 'host'
- * - 'disabled' stays 'disabled' (disabled agents remain disabled)
- */
-export function applyInsecureOverride(policy: PolicyResult): PolicyResult {
-  if (policy.mode === 'sandbox') {
-    return { mode: 'host', reason: `${policy.reason} (overridden by --insecure)` };
-  }
-  return policy;
-}
-
-/**
- * Check whether the resolved mode requires sandboxing and whether
- * the sandbox backend is available. Returns an error string if the
- * run should be blocked, or null if it can proceed.
- */
 export function validateSandboxAvailability(
   mode: ExecutionMode,
   sandboxAvailable: boolean

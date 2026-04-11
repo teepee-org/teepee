@@ -66,6 +66,8 @@ beforeAll(async () => {
   fs.mkdirSync(teepeeDir, { recursive: true });
   const configPath = path.join(teepeeDir, 'config.yaml');
   fs.writeFileSync(configPath, `
+version: 1
+mode: shared
 teepee:
   name: auth-test
 server:

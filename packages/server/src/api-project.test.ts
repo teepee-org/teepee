@@ -44,11 +44,13 @@ function waitForServer(port: number): Promise<void> {
   });
 }
 
-function writeConfig(dir: string, name: string) {
+function writeConfig(dir: string, name: string, mode: 'private' | 'shared' = 'private') {
   const teepeeDir = path.join(dir, '.teepee');
   fs.mkdirSync(teepeeDir, { recursive: true });
   const configPath = path.join(teepeeDir, 'config.yaml');
   fs.writeFileSync(configPath, `
+version: 1
+mode: ${mode}
 teepee:
   name: ${name}
 providers:
@@ -61,78 +63,76 @@ agents:
   return configPath;
 }
 
-describe('/api/project securityMode and bindHost', () => {
-  let secureServer: http.Server;
-  let secureClose: () => void;
-  let securePort: number;
-  let secureCookie: string;
-  let secureTmpDir: string;
+describe('/api/project mode and bindHost', () => {
+  let privateServer: http.Server;
+  let privateClose: () => void;
+  let privatePort: number;
+  let privateCookie: string;
+  let privateTmpDir: string;
 
-  let insecureServer: http.Server;
-  let insecureClose: () => void;
-  let insecurePort: number;
-  let insecureCookie: string;
-  let insecureTmpDir: string;
+  let sharedServer: http.Server;
+  let sharedClose: () => void;
+  let sharedPort: number;
+  let sharedCookie: string;
+  let sharedTmpDir: string;
 
   beforeAll(async () => {
-    // Secure server
-    secureTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-secure-'));
-    const secureConfig = writeConfig(secureTmpDir, 'secure-test');
-    securePort = 31000 + Math.floor(Math.random() * 5000);
-    const secureResult = startServer(secureConfig, securePort);
-    secureServer = secureResult.server;
-    secureClose = secureResult.close;
+    privateTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-private-'));
+    const privateConfig = writeConfig(privateTmpDir, 'private-test', 'private');
+    privatePort = 31000 + Math.floor(Math.random() * 5000);
+    const privateResult = startServer(privateConfig, privatePort);
+    privateServer = privateResult.server;
+    privateClose = privateResult.close;
 
-    // Insecure server
-    insecureTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-insecure-'));
-    const insecureConfig = writeConfig(insecureTmpDir, 'insecure-test');
-    insecurePort = securePort + 1;
-    const insecureResult = startServer(insecureConfig, insecurePort, { insecure: true });
-    insecureServer = insecureResult.server;
-    insecureClose = insecureResult.close;
+    sharedTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-shared-'));
+    const sharedConfig = writeConfig(sharedTmpDir, 'shared-test', 'shared');
+    sharedPort = privatePort + 1;
+    const sharedResult = startServer(sharedConfig, sharedPort);
+    sharedServer = sharedResult.server;
+    sharedClose = sharedResult.close;
 
-    await Promise.all([waitForServer(securePort), waitForServer(insecurePort)]);
+    await Promise.all([waitForServer(privatePort), waitForServer(sharedPort)]);
 
     // Create sessions directly in the DB (owner@localhost is auto-created by ensureOwner)
     const { openDb } = await import('teepee-core');
-    const secureDb = openDb(path.join(secureTmpDir, '.teepee', 'db.sqlite'));
-    const secureSessionId = createSession(secureDb, 'owner@localhost');
-    secureCookie = `teepee_session=${secureSessionId}`;
-    secureDb.close();
+    const privateDb = openDb(path.join(privateTmpDir, '.teepee', 'db.sqlite'));
+    const privateSessionId = createSession(privateDb, 'owner@localhost');
+    privateCookie = `teepee_session=${privateSessionId}`;
+    privateDb.close();
 
-    const insecureDb = openDb(path.join(insecureTmpDir, '.teepee', 'db.sqlite'));
-    const insecureSessionId = createSession(insecureDb, 'owner@localhost');
-    insecureCookie = `teepee_session=${insecureSessionId}`;
-    insecureDb.close();
+    const sharedDb = openDb(path.join(sharedTmpDir, '.teepee', 'db.sqlite'));
+    const sharedSessionId = createSession(sharedDb, 'owner@localhost');
+    sharedCookie = `teepee_session=${sharedSessionId}`;
+    sharedDb.close();
   });
 
   afterAll(() => {
-    secureClose();
-    insecureClose();
-    fs.rmSync(secureTmpDir, { recursive: true, force: true });
-    fs.rmSync(insecureTmpDir, { recursive: true, force: true });
+    privateClose();
+    sharedClose();
+    fs.rmSync(privateTmpDir, { recursive: true, force: true });
+    fs.rmSync(sharedTmpDir, { recursive: true, force: true });
   });
 
-  it('returns securityMode "secure" when --insecure is not set', async () => {
-    const res = await request(securePort, 'GET', '/api/project', secureCookie);
+  it('returns mode "private" for private config', async () => {
+    const res = await request(privatePort, 'GET', '/api/project', privateCookie);
     expect(res.status).toBe(200);
-    expect(res.body.securityMode).toBe('secure');
+    expect(res.body.mode).toBe('private');
   });
 
-  it('returns securityMode "insecure" when --insecure is set', async () => {
-    const res = await request(insecurePort, 'GET', '/api/project', insecureCookie);
+  it('returns mode "shared" for shared config', async () => {
+    const res = await request(sharedPort, 'GET', '/api/project', sharedCookie);
     expect(res.status).toBe(200);
-    expect(res.body.securityMode).toBe('insecure');
+    expect(res.body.mode).toBe('shared');
   });
 
   it('returns bindHost defaulting to 127.0.0.1', async () => {
-    const res = await request(securePort, 'GET', '/api/project', secureCookie);
+    const res = await request(privatePort, 'GET', '/api/project', privateCookie);
     expect(res.status).toBe(200);
     expect(res.body.bindHost).toBe('127.0.0.1');
   });
 
   it('includes name and language in project response', async () => {
-    const res = await request(securePort, 'GET', '/api/project', secureCookie);
-    expect(res.body.name).toBe('secure-test');
+    const res = await request(privatePort, 'GET', '/api/project', privateCookie);
+    expect(res.body.name).toBe('private-test');
   });
 });

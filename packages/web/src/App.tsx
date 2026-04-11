@@ -6,14 +6,17 @@ import { ArchiveList } from './components/ArchiveList';
 import { ChatView } from './components/ChatView';
 import { InvitePage } from './components/InvitePage';
 import { AdminPage } from './components/AdminPage';
+import { SearchPanel } from './components/SearchPanel';
 import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
 import {
   fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage,
   fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic, fetchPresence,
+  fetchTopicInputRequests, answerInputRequest, cancelInputRequest,
 } from './api';
-import type { ProjectInfo, PresenceEntry } from './api';
+import type { ProjectInfo, PresenceEntry, PendingInputRequest } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
+import type { MessageSearchResult } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface ActiveJob {
@@ -25,8 +28,9 @@ interface ActiveJob {
 }
 
 interface AuthUser {
+  id: string;
   email: string;
-  handle: string;
+  handle: string | null;
   role: string;
 }
 
@@ -64,7 +68,9 @@ export function App() {
   const [demoBusy, setDemoBusy] = useState(false);
   const [archivedTopics, setArchivedTopics] = useState<Topic[]>([]);
   const [focusedTopicId, setFocusedTopicId] = useState<number | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
   const [presence, setPresence] = useState<PresenceEntry[]>([]);
+  const [inputRequestsByTopic, setInputRequestsByTopic] = useState<Record<number, PendingInputRequest[]>>({});
   const [activeView, setActiveView] = useState<ActivityView>(() => {
     return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
   });
@@ -133,11 +139,22 @@ export function App() {
 
   // Derive active jobs for the current topic from the per-topic map
   const activeJobs = activeTopicId ? (jobsByTopic[activeTopicId] || []) : [];
+  const activeInputRequests = activeTopicId ? (inputRequestsByTopic[activeTopicId] || []) : [];
 
   // Helper to update jobs for a specific topic
   const updateTopicJobs = useCallback(
     (topicId: number, updater: (prev: ActiveJob[]) => ActiveJob[]) => {
       setJobsByTopic((prev) => ({
+        ...prev,
+        [topicId]: updater(prev[topicId] || []),
+      }));
+    },
+    []
+  );
+
+  const updateTopicInputRequests = useCallback(
+    (topicId: number, updater: (prev: PendingInputRequest[]) => PendingInputRequest[]) => {
+      setInputRequestsByTopic((prev) => ({
         ...prev,
         [topicId]: updater(prev[topicId] || []),
       }));
@@ -191,6 +208,21 @@ export function App() {
           );
           break;
 
+        case 'agent.job.retrying':
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.map((j) =>
+              j.jobId === event.jobId
+                ? {
+                    ...j,
+                    status: 'running',
+                    streamContent: '',
+                    error: event.error,
+                  }
+                : j
+            )
+          );
+          break;
+
         case 'agent.job.completed':
           // Mark job as done
           updateTopicJobs(event.topicId, (prev) =>
@@ -212,6 +244,65 @@ export function App() {
               prev.filter((j) => j.jobId !== event.jobId)
             );
           }, 500);
+          break;
+
+        case 'agent.job.waiting_input':
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.filter((j) => j.jobId !== event.jobId)
+          );
+          fetchTopicInputRequests(event.topicId)
+            .then((requests) => {
+              setInputRequestsByTopic((prev) => ({ ...prev, [event.topicId]: requests }));
+            })
+            .catch(() => {});
+          if (event.topicId === activeTopicId) {
+            fetchMessages(event.topicId, 200).then(setMessages).catch(() => {});
+          }
+          break;
+
+        case 'job.input.answered':
+          updateTopicInputRequests(event.topicId, (prev) =>
+            prev.map((request) =>
+              request.requestId === event.requestId
+                ? { ...request, status: 'answered' }
+                : request
+            )
+          );
+          break;
+
+        case 'job.input.cancelled':
+          updateTopicInputRequests(event.topicId, (prev) =>
+            prev.map((request) =>
+              request.requestId === event.requestId
+                ? { ...request, status: 'cancelled' }
+                : request
+            )
+          );
+          break;
+
+        case 'job.input.expired':
+          updateTopicInputRequests(event.topicId, (prev) =>
+            prev.map((request) =>
+              request.requestId === event.requestId
+                ? { ...request, status: 'expired' }
+                : request
+            )
+          );
+          break;
+
+        case 'agent.job.resumed':
+          updateTopicInputRequests(event.topicId, (prev) =>
+            prev.filter((request) => request.requestId !== event.requestId)
+          );
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.some((job) => job.jobId === event.jobId)
+              ? prev.map((job) =>
+                  job.jobId === event.jobId
+                    ? { ...job, status: 'running', streamContent: '', error: undefined }
+                    : job
+                )
+              : [...prev, { jobId: event.jobId, agentName: event.agentName, status: 'running', streamContent: '' }]
+          );
           break;
 
         case 'agent.job.failed':
@@ -261,7 +352,7 @@ export function App() {
 
       }
     },
-    [activeTopicId, updateTopicJobs]
+    [activeTopicId, updateTopicInputRequests, updateTopicJobs]
   );
 
   const { send, connected } = useWebSocket(onEvent);
@@ -304,12 +395,20 @@ export function App() {
   // streaming events for topics with in-flight agent jobs. The per-topic
   // jobsByTopic map preserves job state across switches.
   const handleSelectTopic = useCallback(
-    (topicId: number) => {
+    (topicId: number, aroundMessageId?: number) => {
       setActiveTopicId(topicId);
       setMessages([]);
+      setHighlightedMessageId(aroundMessageId ?? null);
       setSidebarOpen(false);
-      send({ type: 'topic.join', topicId });
+      send(aroundMessageId
+        ? { type: 'topic.join', topicId, aroundMessageId, radius: 25 }
+        : { type: 'topic.join', topicId });
       send({ type: 'presence.active_topic', topicId });
+      fetchTopicInputRequests(topicId)
+        .then((requests) => {
+          setInputRequestsByTopic((prev) => ({ ...prev, [topicId]: requests }));
+        })
+        .catch(() => {});
       // Auto-clear focus if joining outside focused subtree
       setFocusedTopicId((prev) => {
         if (!prev) return null;
@@ -326,6 +425,10 @@ export function App() {
     },
     [send, topics]
   );
+
+  const handleOpenSearchMessage = useCallback((result: MessageSearchResult) => {
+    handleSelectTopic(result.topicId, result.messageId);
+  }, [handleSelectTopic]);
 
   const handleCreateTopic = useCallback(async () => {
     const name = prompt('Topic name:');
@@ -640,6 +743,14 @@ export function App() {
     [activeTopicId, send, agents, handleSelectTopic, authUser, topics, presence]
   );
 
+  const handleAnswerInput = useCallback(async (requestId: number, payload: { value: boolean | string | string[]; comment?: string }) => {
+    await answerInputRequest(requestId, payload);
+  }, []);
+
+  const handleCancelInput = useCallback(async (requestId: number) => {
+    await cancelInputRequest(requestId);
+  }, []);
+
   const activeTopic = topics.find((t) => t.id === activeTopicId);
   const activeTopics = topics.filter((t) => !t.archived);
 
@@ -708,6 +819,18 @@ export function App() {
         />
       );
     }
+
+    const scopedSearchTopicId = focusedTopicId ?? activeTopicId;
+    if (activeView === 'search') {
+      return (
+        <SearchPanel
+          subtreeTopicId={scopedSearchTopicId}
+          onOpenTopic={handleSelectTopic}
+          onOpenMessage={handleOpenSearchMessage}
+        />
+      );
+    }
+
     // Default: topics view
     const focusTopic = focusedTopicId ? topics.find((t) => t.id === focusedTopicId) : null;
     return (
@@ -720,33 +843,28 @@ export function App() {
         )}
         <TopicTree
           topics={displayTopics}
-        activeTopicId={activeTopicId}
-        onSelectTopic={handleSelectTopic}
-        onCreateTopic={handleCreateTopic}
-        onArchiveTopic={handleArchiveTopic}
-        onFocusTopic={(id) => setFocusedTopicId(id)}
-        onCreateChildTopic={(parentId) => {
-          const name = prompt('Child topic name:');
-          if (!name) return;
-          createTopic(name, parentId).then((topic) => {
-            fetchTopics().then(setTopics);
-            handleSelectTopic(topic.id);
-          });
-        }}
-        focusedTopicId={focusedTopicId}
-        userRole={authUser.role}
-      />
+          activeTopicId={activeTopicId}
+          onSelectTopic={handleSelectTopic}
+          onCreateTopic={handleCreateTopic}
+          onArchiveTopic={handleArchiveTopic}
+          onFocusTopic={(id) => setFocusedTopicId(id)}
+          onCreateChildTopic={(parentId) => {
+            const name = prompt('Child topic name:');
+            if (!name) return;
+            createTopic(name, parentId).then((topic) => {
+              fetchTopics().then(setTopics);
+              handleSelectTopic(topic.id);
+            });
+          }}
+          focusedTopicId={focusedTopicId}
+          userRole={authUser.role}
+        />
       </>
     );
   };
 
   return (
     <div className="app">
-      {project?.securityMode === 'insecure' && (
-        <div className="insecure-banner">
-          INSECURE MODE — Sandboxing is disabled. For local evaluation and trusted users only.
-        </div>
-      )}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <ActivityBar
         activeView={activeView}
@@ -773,6 +891,17 @@ export function App() {
           </div>
           {/* Mobile-only view switcher icons */}
           <div className="drawer-header-actions">
+            <button
+              className={`drawer-view-btn ${activeView === 'search' ? 'active' : ''}`}
+              onClick={() => setActiveView(activeView === 'search' ? 'topics' : 'search')}
+              aria-label="Search"
+              title="Search"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8.5" cy="8.5" r="5.5" />
+                <path d="M13 13l4 4" />
+              </svg>
+            </button>
             <button
               className={`drawer-view-btn ${activeView === 'archive' ? 'active' : ''}`}
               onClick={() => setActiveView(activeView === 'archive' ? 'topics' : 'archive')}
@@ -864,7 +993,7 @@ export function App() {
       </aside>
       <main className="main">
         {activeView === 'settings' && authUser.role === 'owner' ? (
-          <AdminPage agents={agents} />
+          <AdminPage agents={agents} mode={project?.mode ?? 'private'} />
         ) : activeTopic ? (
           <ChatView
             topicId={activeTopic.id}
@@ -874,7 +1003,14 @@ export function App() {
             agents={agents}
             commands={COMMANDS}
             activeJobs={activeJobs}
+            inputRequests={activeInputRequests}
+            currentUserId={authUser.id}
             onSend={handleSend}
+            onAnswerInput={handleAnswerInput}
+            onCancelInput={handleCancelInput}
+            highlightedMessageId={highlightedMessageId}
+            isOwner={authUser.role === 'owner'}
+            projectPath={project?.path}
           />
         ) : (
           <div className="empty-state">

@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as crypto from 'crypto';
 import {
   getMessages,
+  getMessagesAround,
   insertMessage,
   getMessageById,
   executeCommand,
@@ -27,6 +28,11 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
       socket.destroy();
       return;
     }
+    if (ctx.config.mode === 'private' && user.role !== 'owner') {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
@@ -36,6 +42,10 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
     const user = authenticateRequest(ctx.db, req);
     if (!user) {
       ws.close(1008, 'Not authenticated');
+      return;
+    }
+    if (ctx.config.mode === 'private' && user.role !== 'owner') {
+      ws.close(1008, 'Private mode is owner-only');
       return;
     }
     const client: ClientState = {
@@ -57,7 +67,9 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
         switch (event.type) {
           case 'topic.join': {
             client.subscribedTopics.add(event.topicId);
-            const msgs = getMessages(ctx.db, event.topicId, 50);
+            const msgs = event.aroundMessageId
+              ? getMessagesAround(ctx.db, event.topicId, event.aroundMessageId, event.radius ?? 25) ?? getMessages(ctx.db, event.topicId, 50)
+              : getMessages(ctx.db, event.topicId, 50);
             ws.send(JSON.stringify({ type: 'topic.history', topicId: event.topicId, messages: msgs }));
             break;
           }
@@ -68,7 +80,7 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
           }
 
           case 'message.send': {
-            if (client.user.role === 'observer') {
+            if (client.user.role !== 'owner' && client.user.role !== 'collaborator') {
               ws.send(JSON.stringify({ type: 'error', message: 'Observers cannot send messages' }));
               break;
             }

@@ -9,3 +9,6 @@ export * from './execution-policy.js';
 export * from './sandbox/index.js';
 export * from './commands/index.js';
 export * from './protocol/index.js';
+export * from './artifacts/index.js';
+export * from './references.js';
+export * from './user-input/index.js';

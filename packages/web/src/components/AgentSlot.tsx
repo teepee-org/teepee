@@ -1,14 +1,15 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface Props {
   agentName: string;
   status: 'queued' | 'running' | 'streaming' | 'done' | 'failed';
   streamContent: string;
   error?: string;
+  projectPath?: string;
+  onOpenReference?: (href: string) => void;
 }
 
-export function AgentSlot({ agentName, status, streamContent, error }: Props) {
+export function AgentSlot({ agentName, status, streamContent, error, projectPath, onOpenReference }: Props) {
   const statusLabel: Record<string, string> = {
     queued: 'queued',
     running: 'thinking...',
@@ -37,7 +38,7 @@ export function AgentSlot({ agentName, status, streamContent, error }: Props) {
         {status === 'failed' && error ? (
           <div className="agent-error">{error}</div>
         ) : streamContent ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamContent}</ReactMarkdown>
+          <MarkdownRenderer projectPath={projectPath} onOpenReference={onOpenReference}>{streamContent}</MarkdownRenderer>
         ) : status === 'queued' || status === 'running' ? (
           <div className="agent-thinking">
             <span className="dots">...</span>

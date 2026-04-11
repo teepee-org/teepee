@@ -39,6 +39,34 @@ export function getMessageById(db: DatabaseType, id: number): MessageRow | undef
   ).get(id) as MessageRow | undefined;
 }
 
+export function getMessagesAround(
+  db: DatabaseType,
+  topicId: number,
+  messageId: number,
+  radius: number = 25
+): MessageRow[] | undefined {
+  const target = getMessageById(db, messageId);
+  if (!target || target.topic_id !== topicId) return undefined;
+
+  const safeRadius = Math.max(1, Math.min(100, Math.floor(radius)));
+  const beforeAndTarget = db.prepare(
+    `SELECT id, topic_id, author_type, author_name, body, created_at
+       FROM messages
+      WHERE topic_id = ? AND id <= ?
+      ORDER BY id DESC
+      LIMIT ?`
+  ).all(topicId, messageId, safeRadius + 1) as MessageRow[];
+  const after = db.prepare(
+    `SELECT id, topic_id, author_type, author_name, body, created_at
+       FROM messages
+      WHERE topic_id = ? AND id > ?
+      ORDER BY id ASC
+      LIMIT ?`
+  ).all(topicId, messageId, safeRadius) as MessageRow[];
+
+  return beforeAndTarget.reverse().concat(after);
+}
+
 export function insertMention(db: DatabaseType, messageId: number, agentName: string, active: boolean): void {
   db.prepare(
     'INSERT OR IGNORE INTO message_mentions (message_id, agent_name, active) VALUES (?, ?, ?)'

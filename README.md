@@ -19,22 +19,22 @@ Teepee is a product by TypeEffect.
 Try Teepee in under 5 minutes. Run this from the root of any project:
 
 ```bash
-npx teepee-cli serve --insecure
+npx teepee-cli start
 ```
 
 On first run, Teepee creates `.teepee/config.yaml` and exits. Run the command again to start the server. Open the owner link printed in the terminal.
 
-> **Warning:** `--insecure` disables sandbox enforcement. Agents may access files outside the project, including the host user's home directory and other readable disk paths. Use only for local evaluation or with users you fully trust. Do not expose this mode to untrusted users or public networks.
+For stronger isolation, run Teepee inside a dedicated VM or container. Teepee profiles control access inside that deployment boundary.
 
 ## Secure / shared setup
 
-For shared or persistent use, run Teepee with sandboxing enabled (the default):
+For shared or persistent use, set `mode: shared` in `.teepee/config.yaml` before inviting teammates:
 
 ```bash
 npx teepee-cli start
 ```
 
-This requires a sandbox backend (bubblewrap on Linux, Docker on macOS). Non-owner agent runs are confined to the project directory. See [Execution policy](#execution-policy) below for details.
+This requires a sandbox backend (bubblewrap on Linux, Docker on macOS). Agent runs are resolved from the role access matrix: `readonly` and `readwrite` run in the project sandbox, while `trusted` runs with host filesystem access. See [Execution policy](#execution-policy) below for details.
 
 The npm package is `teepee-cli`. If you install it globally, it exposes the `teepee` binary.
 
@@ -56,16 +56,14 @@ Teepee is for the moment when "open a few terminals and coordinate agents by han
 - Let agents delegate work to each other in public, auditable conversation
 - Mix providers like Claude, Codex, and local models in one project
 - Keep everything self-hosted and close to the codebase
-- Let coding agents operate on the real project (sandboxed for non-owners, full access for owners)
+- Let coding agents operate on the real project with explicit `readonly`, `readwrite`, or `trusted` access profiles
 
 ## Getting started
 
 **1. Run Teepee**
 
 ```bash
-npx teepee-cli serve --insecure   # local eval (no sandbox needed)
-# or
-npx teepee-cli start              # secure mode (sandbox required for non-owner runs)
+npx teepee-cli start
 ```
 
 On first run, Teepee creates `.teepee/config.yaml` and exits. It auto-detects installed agent CLIs (`claude`, `codex`, `ollama`). Edit the config if needed, then run the command again.
@@ -74,7 +72,7 @@ If you prefer a global install:
 
 ```bash
 npm install -g teepee-cli
-teepee serve --insecure
+teepee start
 ```
 
 **2. Open the owner link**
@@ -119,7 +117,7 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Self-hosted** — Runs on your machine. Your code, your API keys, your control.
 - **Markdown native** — All messages are Markdown with syntax-highlighted code blocks, tables, and copy buttons.
 - **Web UI** — Clean dark-theme interface with topics, agent slots, and `@` autocomplete.
-- **Auth built in** — Owner login via secret link. Invite users with magic links. Role-based permissions (owner/user/observer). Deny-by-default agent tagging.
+- **Auth built in** — Owner login via secret link. Invite users with magic links. Role-based permissions (owner/collaborator/observer). Deny-by-default agent tagging.
 
 ## Releases
 
@@ -148,6 +146,9 @@ reviewer> Found a bug. @coder please fix the null check
 Teepee reads its project config from `.teepee/config.yaml`.
 
 ```yaml
+version: 1
+mode: private
+
 teepee:
   name: my-project
   language: en           # agent response language
@@ -177,6 +178,18 @@ agents:
     provider: codex
   devops:
     provider: codex
+
+roles:
+  owner:
+    coder: readwrite
+    reviewer: readwrite
+    architect: readwrite
+    devops: trusted
+  collaborator:
+    coder: readwrite
+    reviewer: readonly
+    architect: draft
+  observer: {}
 
 limits:
   max_agents_per_message: 5
@@ -211,11 +224,12 @@ limits:
 
 Click **Admin** in the sidebar (owner only) to:
 
-- **Invite users** — Generate magic links with role and agent permissions
-- **Manage permissions** — Allow/deny specific agents per user
+- **Invite users** — Generate magic links with a user role
+- **Manage users** — Change a user's role, revoke access, re-enable, or delete
+- **Review access** — Inspect the role-to-agent access matrix from `.teepee/config.yaml`
 - **Revoke access** — Instantly invalidate sessions and tokens
 
-This is a shared workspace, not a single-user agent console: multiple humans can join the same Teepee, collaborate in topics, and decide which users can tag which agents.
+This is a shared workspace, not a single-user agent console: multiple humans can join the same Teepee, collaborate in topics, and receive agent access through their role.
 
 > **Shared-use responsibility:** If you invite collaborators to use agents backed by third-party paid services (e.g. Claude, Codex), you are responsible for verifying that those services' Terms of Service allow shared or team use. Teepee does not grant additional usage rights for those services.
 
@@ -224,7 +238,7 @@ This is a shared workspace, not a single-user agent console: multiple humans can
 - **Owner**: Authenticated via a one-time secret link printed to the terminal at startup. The secret changes on every restart. Works from any device.
 - **Users**: Invited via magic link (generated from the Admin panel or CLI). Choose a handle on first access. Session cookie (30 days, HttpOnly).
 - **Observers**: Read-only. Cannot post messages, create topics, tag agents, or run commands.
-- **Permissions**: Deny-by-default. Owner must explicitly allow which agents each user can tag via the Admin panel.
+- **Access**: Deny-by-default. A user's role is resolved through `roles[role][agent]` in `.teepee/config.yaml`.
 - **All API endpoints** require a valid session. Unauthenticated requests get 401. Only auth endpoints and static assets are public.
 - **WebSocket** connections are authenticated from the session cookie at connection time. Unauthenticated clients cannot join topics, send messages, or run commands.
 - **Identity is server-side**: the author of a message is always derived from the session, never from client-supplied fields.
@@ -306,24 +320,50 @@ You must answer in <language>.
 <triggering message>
 ```
 
-Provider commands run according to the **execution policy**:
+Provider commands run according to the **role access matrix**:
 
-- **Owner** runs default to **host** mode — the agent executes directly in the project directory with full host access.
-- **Non-owner** (user) runs default to **sandbox** mode — the agent is confined to the project directory only.
-- **Observer** accounts cannot trigger agents at all.
-- Agents may declare a `capability`:
-  - `host_allowed` (default) — follows the requester's role policy.
-  - `sandbox_only` — always sandboxed, even for owner.
-  - `disabled` — agent cannot be run by anyone.
-- Chained agent calls inherit the original requester's policy. A non-owner cannot escalate by asking one agent to trigger another.
+```yaml
+roles:
+  owner:
+    coder: trusted
+    reviewer: readwrite
+  collaborator:
+    coder: readwrite
+    reviewer: readonly
+  observer: {}
+```
 
-**`--insecure` mode:** When started with `teepee serve --insecure`, sandbox enforcement is disabled entirely. All runnable agents execute in host mode regardless of the requester's role. Disabled agents remain disabled. This mode is intended only for local evaluation or fully trusted environments. The web UI shows a persistent warning banner when insecure mode is active.
+The mapping is:
+
+```text
+roles[role][agent] = effective access profile
+missing agent mapping = deny
+unknown profile = invalid config
+```
+
+Built-in profiles:
+
+- `readonly` — provider CLI runs in a read-only codebase sandbox, no artifact write.
+- `draft` — provider CLI runs in a read-only codebase sandbox, with artifact document write.
+- `readwrite` — provider CLI runs in a read-write codebase sandbox, with artifact document write.
+- `trusted` — provider CLI runs with host filesystem access, with artifact document write.
+
+Agents define which provider and prompt to use. Roles define whether an agent can run and with which profile.
+
+**Workspace mode:** `mode: private` is local owner-only operation and can only bind to loopback hosts. `mode: shared` enables invite-based multi-user operation. Teepee no longer exposes an `--insecure` runtime switch; run the whole workspace inside a VM/container when you need a stronger boundary than the host process.
+
+**Agent chain policy:** Agents can delegate work to other agents via mentions in their output. This is governed by `chain_policy`:
+  - `none` — mentions in output are persisted as text only, never trigger another agent.
+  - `propose_only` — same as `none` (reserved for future approval workflows).
+  - `delegate_with_origin_policy` — mentions trigger the target agent, subject to the original requester's role matrix.
+
+The target agent never inherits the source agent's privileges. Chained calls are resolved again as `roles[origin_user_role][target_agent]`.
 
 **Sandbox backends:**
 
 - **Linux**: [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`). Install with `apt install bubblewrap`.
 - **macOS / cross-platform**: Docker-compatible container runtime (`docker` or `podman`).
-- If the required sandbox backend is not available and a non-owner run requires sandboxing, the run **fails closed** with a clear error — it does not silently fall back to host mode.
+- If the required sandbox backend is not available and the effective profile requires sandboxing, the run **fails closed** with a clear error — it does not silently fall back to host mode.
 
 Sandboxed runs mount only the project root at `/workspace`, with a private `/tmp` and empty `/home/agent`. Parent directories and the real host home are not mounted. Environment variables are not inherited — only an explicit allowlist is forwarded.
 
@@ -331,10 +371,6 @@ Sandboxed runs mount only the project root at `/workspace`, with a private `/tmp
 
 ```yaml
 security:
-  role_defaults:
-    owner: host
-    user: sandbox
-    observer: disabled
   sandbox:
     runner: bubblewrap        # or 'container' for macOS
     empty_home: true
@@ -349,17 +385,29 @@ providers:
       command: "claude -p --permission-mode acceptEdits"
 
 agents:
+  architect:
+    provider: claude
+    chain_policy: delegate_with_origin_policy
   coder:
     provider: claude
-    capability: host_allowed
   reviewer:
     provider: claude
-    capability: sandbox_only
+
+roles:
+  owner:
+    architect: readwrite
+    coder: trusted
+    reviewer: readwrite
+  collaborator:
+    architect: draft
+    coder: readwrite
+    reviewer: readonly
+  observer: {}
 ```
 
 When sandbox mode uses the **container** backend, the provider must define `providers.<name>.sandbox.image`. Teepee does not fall back to a generic image or silently reuse host-only runtime assumptions. If the configured sandbox runner is unavailable, or the selected provider has no container runtime definition, the run fails closed.
 
-All security config is optional — safe defaults apply when not specified.
+`roles` is the primary access policy. Legacy configs without `roles` are normalized for compatibility, but new configs should use the explicit role matrix.
 
 ## License
 

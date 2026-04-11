@@ -1,13 +1,47 @@
 // Re-export everything from sub-modules — maintains backward compatibility
 export { openDb } from './database.js';
 export { SCHEMA } from './schema.js';
-export { createUser, activateUser, getUser, getUserByHandle, listUsers, revokeUser } from './users.js';
+export { createUser, activateUser, getUser, getUserById, getUserByHandle, listUsers, revokeUser, normalizeUserRole } from './users.js';
 export type { UserRow } from './users.js';
 export { createTopic, getTopic, listTopics, setTopicLanguage, archiveTopic, listArchivedTopics, restoreTopic, isAncestorOf, moveTopicToRoot, moveTopicInto, moveTopicBefore, moveTopicAfter } from './topics.js';
 export type { TopicRow } from './topics.js';
 export { runMigrations } from './migrate.js';
-export { insertMessage, getMessages, getRecentMessages, getMessageById, insertMention } from './messages.js';
+export { insertMessage, getMessages, getRecentMessages, getMessageById, getMessagesAround, insertMention } from './messages.js';
 export type { MessageRow } from './messages.js';
-export { createBatch, createJob, updateJobStatus, getJobsForBatch, countChainJobs } from './jobs.js';
+export { searchAll, searchTopics, searchMessages } from './search.js';
+export type { SearchScope, SearchType, SearchOptions, SearchResponse, TopicSearchResult, MessageSearchResult } from './search.js';
+export { createBatch, createJob, updateJobStatus, markJobWaitingInput, markJobResumed, cancelJob, getJob, getJobsForBatch, countChainJobs } from './jobs.js';
 export { setPermission, getPermissions, setAlias, resolveAlias, getTopicAliases } from './permissions.js';
 export { emitEvent, getEventsAfter, logUsage, countRecentJobs } from './events.js';
+export {
+  createDocumentArtifact,
+  updateDocumentArtifact,
+  listTopicArtifacts,
+  searchArtifacts,
+  getArtifact,
+  getArtifactVersions,
+  getArtifactVersion,
+  getArtifactVersionByNumber,
+  getCurrentArtifactVersion,
+  linkMessageArtifact,
+  getMessageArtifacts,
+  getEnrichedMessageArtifacts,
+  promoteArtifact,
+  listTopicArtifactContext,
+  restoreDocumentArtifact,
+  rewriteDocumentArtifactFromVersion,
+  ArtifactConflictError,
+} from './artifacts.js';
+export type {
+  ArtifactRow,
+  ArtifactVersionRow,
+  MessageArtifactRow,
+  EnrichedMessageArtifact,
+  ArtifactContextInfo,
+  CreateDocumentArtifactParams,
+  UpdateDocumentArtifactParams,
+  RestoreDocumentArtifactParams,
+  RewriteDocumentArtifactFromVersionParams,
+  CreateArtifactResult,
+  UpdateArtifactResult,
+} from './artifacts.js';

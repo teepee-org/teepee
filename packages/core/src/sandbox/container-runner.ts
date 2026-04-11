@@ -79,9 +79,15 @@ export class ContainerSandboxRunner extends SandboxRunner {
       }
     }
 
-    // Mount project root at /workspace
-    runArgs.push('-v', `${options.projectRoot}:/workspace`);
+    // Mount project root at /workspace. readonly profile uses a read-only volume.
+    runArgs.push('-v', `${options.projectRoot}:/workspace${options.readOnlyProject ? ':ro' : ''}`);
     runArgs.push('-w', '/workspace');
+
+    // Per-job output directory (rw)
+    if (options.outputDir) {
+      runArgs.push('-v', `${options.outputDir}:/teepee-out`);
+      runArgs.push('--env', 'TEEPEE_OUTPUT_DIR=/teepee-out');
+    }
 
     // Empty home
     if (options.emptyHome) {

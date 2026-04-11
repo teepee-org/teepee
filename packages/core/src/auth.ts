@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import { getUser, getUserByHandle, activateUser } from './db.js';
+import { getUser, getUserByHandle, getUserById, activateUser, emitEvent } from './db.js';
 
 export interface AuthConfig {
   session_days: number;
@@ -23,11 +23,15 @@ export function createInviteToken(
   email: string,
   ttlMinutes: number = DEFAULT_AUTH_CONFIG.token_ttl_minutes
 ): string {
+  const user = getUser(db, email);
+  if (!user) {
+    throw new Error(`User not found: ${email}`);
+  }
   const token = generateToken();
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
   db.prepare(
-    `INSERT INTO login_tokens (token, email, purpose, expires_at) VALUES (?, ?, 'invite', ?)`
-  ).run(token, email, expiresAt);
+    `INSERT INTO login_tokens (token, user_id, email, purpose, expires_at) VALUES (?, ?, ?, 'invite', ?)`
+  ).run(token, user.id, email, expiresAt);
   return token;
 }
 
@@ -36,16 +40,21 @@ export function createLoginToken(
   email: string,
   ttlMinutes: number = DEFAULT_AUTH_CONFIG.token_ttl_minutes
 ): string {
+  const user = getUser(db, email);
+  if (!user) {
+    throw new Error(`User not found: ${email}`);
+  }
   const token = generateToken();
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
   db.prepare(
-    `INSERT INTO login_tokens (token, email, purpose, expires_at) VALUES (?, ?, 'login', ?)`
-  ).run(token, email, expiresAt);
+    `INSERT INTO login_tokens (token, user_id, email, purpose, expires_at) VALUES (?, ?, ?, 'login', ?)`
+  ).run(token, user.id, email, expiresAt);
   return token;
 }
 
 export interface TokenValidation {
   valid: boolean;
+  userId?: string;
   email?: string;
   purpose?: string;
   error?: string;
@@ -57,7 +66,7 @@ export function validateToken(
 ): TokenValidation {
   const row = db
     .prepare(
-      'SELECT token, email, purpose, expires_at, used_at FROM login_tokens WHERE token = ?'
+      'SELECT token, user_id, email, purpose, expires_at, used_at FROM login_tokens WHERE token = ?'
     )
     .get(token) as any;
 
@@ -67,11 +76,11 @@ export function validateToken(
     return { valid: false, error: 'Token expired' };
 
   // Check user status
-  const user = getUser(db, row.email);
+  const user = row.user_id ? getUserById(db, row.user_id) : getUser(db, row.email);
   if (!user) return { valid: false, error: 'User not found' };
   if (user.status === 'revoked') return { valid: false, error: 'User revoked' };
 
-  return { valid: true, email: row.email, purpose: row.purpose };
+  return { valid: true, userId: user.id, email: user.email, purpose: row.purpose };
 }
 
 export function consumeToken(db: DatabaseType, token: string): void {
@@ -89,23 +98,28 @@ export function createSession(
   userAgent?: string,
   ip?: string
 ): string {
+  const user = getUser(db, email);
+  if (!user) {
+    throw new Error(`User not found: ${email}`);
+  }
   const sessionId = generateToken();
   const expiresAt = new Date(
     Date.now() + sessionDays * 24 * 60 * 60_000
   ).toISOString();
   db.prepare(
-    `INSERT INTO sessions (id, email, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?)`
-  ).run(sessionId, email, expiresAt, userAgent ?? null, ip ?? null);
+    `INSERT INTO sessions (id, user_id, email, expires_at, user_agent, ip) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(sessionId, user.id, email, expiresAt, userAgent ?? null, ip ?? null);
 
   // Update last_login_at
   db.prepare(
-    `UPDATE users SET last_login_at = datetime('now') WHERE email = ?`
-  ).run(email);
+    `UPDATE users SET last_login_at = datetime('now') WHERE id = ?`
+  ).run(user.id);
 
   return sessionId;
 }
 
 export interface SessionUser {
+  id: string;
   email: string;
   handle: string | null;
   role: string;
@@ -118,7 +132,7 @@ export function getSession(
 ): SessionUser | null {
   const session = db
     .prepare(
-      'SELECT email, expires_at FROM sessions WHERE id = ?'
+      'SELECT user_id, email, expires_at FROM sessions WHERE id = ?'
     )
     .get(sessionId) as any;
 
@@ -129,7 +143,7 @@ export function getSession(
     return null;
   }
 
-  const user = getUser(db, session.email);
+  const user = session.user_id ? getUserById(db, session.user_id) : getUser(db, session.email);
   if (!user || user.status === 'revoked') {
     db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
     return null;
@@ -148,10 +162,22 @@ export function deleteSession(db: DatabaseType, sessionId: string): void {
 }
 
 export function deleteUserSessions(db: DatabaseType, email: string): void {
+  const user = getUser(db, email);
+  if (user) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ? OR email = ?').run(user.id, email);
+    return;
+  }
   db.prepare('DELETE FROM sessions WHERE email = ?').run(email);
 }
 
 export function invalidateUserTokens(db: DatabaseType, email: string): void {
+  const user = getUser(db, email);
+  if (user) {
+    db.prepare(
+      `UPDATE login_tokens SET used_at = datetime('now') WHERE (user_id = ? OR email = ?) AND used_at IS NULL`
+    ).run(user.id, email);
+    return;
+  }
   db.prepare(
     `UPDATE login_tokens SET used_at = datetime('now') WHERE email = ? AND used_at IS NULL`
   ).run(email);
@@ -230,9 +256,9 @@ export function ensureOwner(
   const user = getUser(db, ownerEmail);
   if (!user) {
     db.prepare(
-      `INSERT INTO users (email, role, status, handle, accepted_at)
-       VALUES (?, 'owner', 'active', 'owner', datetime('now'))`
-    ).run(ownerEmail);
+      `INSERT INTO users (id, email, role, status, handle, accepted_at)
+       VALUES (?, ?, 'owner', 'active', 'owner', datetime('now'))`
+    ).run(crypto.randomUUID(), ownerEmail);
   }
 }
 
@@ -244,7 +270,12 @@ export function getOrCreateOwnerSession(
   // Check for existing valid session
   const existing = db
     .prepare(
-      `SELECT id FROM sessions WHERE email = ? AND expires_at > datetime('now') ORDER BY created_at DESC LIMIT 1`
+      `SELECT s.id
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id OR u.email = s.email
+       WHERE u.email = ? AND s.expires_at > datetime('now')
+       ORDER BY s.created_at DESC
+       LIMIT 1`
     )
     .get(ownerEmail) as any;
 
@@ -256,6 +287,73 @@ export function getOrCreateOwnerSession(
   return createSession(db, ownerEmail, sessionDays);
 }
 
+// --- Owner management ---
+
+export function countOwners(db: DatabaseType): number {
+  const row = db.prepare(`SELECT COUNT(*) as cnt FROM users WHERE role = 'owner' AND status != 'revoked'`).get() as { cnt: number };
+  return row.cnt;
+}
+
+function isLastOwner(db: DatabaseType, email: string): boolean {
+  const user = getUser(db, email);
+  if (!user || user.role !== 'owner' || user.status === 'revoked') return false;
+  return countOwners(db) <= 1;
+}
+
+export function promoteToOwner(
+  db: DatabaseType,
+  email: string,
+  actorEmail?: string
+): { ok: boolean; error?: string } {
+  const user = getUser(db, email);
+  if (!user) return { ok: false, error: 'User not found' };
+  if (user.role === 'owner') return { ok: false, error: 'Already an owner' };
+  if (user.status !== 'active') return { ok: false, error: 'User is not active' };
+
+  db.prepare(`UPDATE users SET role = 'owner' WHERE email = ?`).run(email);
+  emitEvent(db, 'user.owner_promoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null }));
+  return { ok: true };
+}
+
+export function demoteFromOwner(
+  db: DatabaseType,
+  email: string,
+  actorEmail?: string
+): { ok: boolean; error?: string } {
+  const user = getUser(db, email);
+  if (!user) return { ok: false, error: 'User not found' };
+  if (user.role !== 'owner') return { ok: false, error: 'User is not an owner' };
+  if (isLastOwner(db, email)) return { ok: false, error: 'Cannot demote the last owner' };
+
+  db.prepare(`UPDATE users SET role = 'collaborator' WHERE email = ?`).run(email);
+  emitEvent(db, 'user.owner_demoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null }));
+  return { ok: true };
+}
+
+export function setUserRole(
+  db: DatabaseType,
+  email: string,
+  role: 'owner' | 'collaborator' | 'observer',
+  actorEmail?: string
+): { ok: boolean; error?: string } {
+  const user = getUser(db, email);
+  if (!user) return { ok: false, error: 'User not found' };
+  if (user.role === role) return { ok: true };
+  if (user.status === 'revoked') return { ok: false, error: 'Cannot change role for a revoked user' };
+  if (user.role === 'owner' && role !== 'owner' && isLastOwner(db, email)) {
+    return { ok: false, error: 'Cannot demote the last owner' };
+  }
+
+  db.prepare(`UPDATE users SET role = ? WHERE email = ?`).run(role, email);
+  emitEvent(db, 'user.role_changed', null, JSON.stringify({
+    email,
+    actor_email: actorEmail ?? null,
+    old_role: user.role,
+    new_role: role,
+  }));
+  return { ok: true };
+}
+
 // --- Revoke (extended) ---
 
 export function revokeUserFull(
@@ -264,7 +362,7 @@ export function revokeUserFull(
 ): boolean {
   const user = getUser(db, email);
   if (!user || user.status === 'revoked') return false;
-  if (user.role === 'owner') return false;
+  if (user.role === 'owner' && isLastOwner(db, email)) return false;
 
   db.prepare(
     `UPDATE users SET pre_revocation_status = status, status = 'revoked', revoked_at = datetime('now') WHERE email = ?`
@@ -284,7 +382,6 @@ export function reEnableUser(
   ).get(email) as { status: string; pre_revocation_status: string | null; role: string } | undefined;
 
   if (!row || row.status !== 'revoked') return false;
-  if (row.role === 'owner') return false;
 
   // Restore to pre-revocation status, fallback to 'active' for legacy rows
   const restoreTo = row.pre_revocation_status || 'active';
@@ -302,14 +399,15 @@ export function deleteUserPermanently(
 ): boolean {
   const user = getUser(db, email);
   if (!user) return false;
-  if (user.role === 'owner') return false;
+  if (user.role === 'owner' && isLastOwner(db, email)) return false;
 
   // Purge all user-linked data
-  db.prepare('DELETE FROM sessions WHERE email = ?').run(email);
-  db.prepare('DELETE FROM login_tokens WHERE email = ?').run(email);
-  db.prepare('DELETE FROM permissions WHERE email = ?').run(email);
-  db.prepare('DELETE FROM usage_log WHERE user_email = ?').run(email);
-  db.prepare('DELETE FROM users WHERE email = ?').run(email);
+  const userId = user.id;
+  db.prepare('DELETE FROM sessions WHERE user_id = ? OR email = ?').run(userId, email);
+  db.prepare('DELETE FROM login_tokens WHERE user_id = ? OR email = ?').run(userId, email);
+  db.prepare('DELETE FROM permissions WHERE user_id = ? OR email = ?').run(userId, email);
+  db.prepare('DELETE FROM usage_log WHERE user_id = ? OR user_email = ?').run(userId, email);
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 
   return true;
 }
