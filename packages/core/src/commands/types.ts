@@ -1,14 +1,16 @@
 import type { Database as DatabaseType } from 'better-sqlite3';
 import type { SessionUser } from '../auth.js';
+import type { Capability, TeepeeConfig } from '../config.js';
 
-export type UserRole = 'owner' | 'collaborator' | 'observer';
+export type UserRole = string;
 
-export type AgentAccessProfile = 'readonly' | 'readwrite' | 'trusted';
+export type AgentAccessProfile = 'readonly' | 'draft' | 'readwrite' | 'trusted';
 
 export type ChainPolicy = 'none' | 'propose_only' | 'delegate_with_origin_policy';
 
 export interface CommandContext {
   db: DatabaseType;
+  config: TeepeeConfig;
   user: SessionUser;
   topicId: number;
   broadcast: (topicId: number, event: object) => void;
@@ -25,8 +27,8 @@ export interface CommandResult {
 export interface CommandDef {
   name: string;
   help: string;
-  /** Minimum role required. 'collaborator' means collaborator or owner. 'owner' means owner only. */
-  minRole: UserRole;
+  /** Capability required to execute the command. */
+  requiredCapability: Capability;
   /** Validate and execute the command. Params is the raw payload minus `command` and `topicId`. */
   execute(ctx: CommandContext, params: Record<string, any>): CommandResult;
 }

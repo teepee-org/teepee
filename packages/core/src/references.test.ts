@@ -3,6 +3,8 @@ import {
   parseTeepeeUri,
   normalizeLegacyHref,
   resolveReference,
+  detectPreviewMimeLanguage,
+  isLikelyTextBuffer,
 } from './references';
 
 describe('parseTeepeeUri', () => {
@@ -77,6 +79,17 @@ describe('parseTeepeeUri', () => {
   it('rejects non-teepee URIs', () => {
     expect(parseTeepeeUri('https://example.com')).toBeNull();
   });
+
+  it('parses filesystem URI with root id', () => {
+    const r = parseTeepeeUri('teepee:/fs/host/etc/hosts#L3');
+    expect(r).toEqual({
+      namespace: 'fs',
+      rootId: 'host',
+      resource: 'etc/hosts',
+      line: 3,
+      column: undefined,
+    });
+  });
 });
 
 describe('normalizeLegacyHref', () => {
@@ -112,6 +125,12 @@ describe('normalizeLegacyHref', () => {
   it('rejects traversal in normalized path', () => {
     expect(normalizeLegacyHref('/home/user/project/../project/file.ts', base)).toBeNull();
   });
+
+  it('normalizes absolute paths under configured host roots', () => {
+    expect(
+      normalizeLegacyHref('/etc/hosts', base, [{ id: 'host', kind: 'host', path: '/', resolvedPath: '/' }])
+    ).toBe('teepee:/fs/host/etc/hosts');
+  });
 });
 
 describe('resolveReference', () => {
@@ -140,5 +159,26 @@ describe('resolveReference', () => {
 
   it('returns null for invalid URIs', () => {
     expect(resolveReference('https://example.com', base)).toBeNull();
+  });
+
+  it('resolves filesystem file references for configured roots', () => {
+    const r = resolveReference(
+      'teepee:/fs/host/etc/hosts',
+      base,
+      [{ id: 'host', kind: 'host', path: '/', resolvedPath: '/' }]
+    );
+    expect(r).not.toBeNull();
+    expect(r!.targetType).toBe('filesystem-file');
+    expect(r!.fetch).toEqual({ kind: 'filesystem', rootId: 'host', path: 'etc/hosts' });
+  });
+});
+
+describe('detectPreviewMimeLanguage', () => {
+  it('treats extensionless utf8 files as text/plain for preview', () => {
+    expect(isLikelyTextBuffer(Buffer.from('127.0.0.1 localhost\n', 'utf8'))).toBe(true);
+    expect(detectPreviewMimeLanguage('etc/hosts', Buffer.from('127.0.0.1 localhost\n', 'utf8'))).toEqual({
+      mime: 'text/plain',
+      language: 'plaintext',
+    });
   });
 });

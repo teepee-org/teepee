@@ -4,7 +4,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { WebSocket } from 'ws';
-import { createSession, createUser } from 'teepee-core';
+import {
+  createBatch,
+  createJob,
+  createSession,
+  createTopic,
+  createUser,
+  insertMessage,
+  openDb,
+  updateJobStatus,
+} from 'teepee-core';
 import { startServer } from './index.js';
 
 function request(
@@ -109,6 +118,28 @@ describe('POST /api/topics with parentTopicId', () => {
     expect(res.body.parent_topic_id).toBeNull();
   });
 
+  it('includes aggregated queued and running job counts in GET /api/topics', async () => {
+    const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
+    const topicId = createTopic(db, 'Runtime Topic');
+    const messageId = insertMessage(db, topicId, 'user', 'owner', '@bot work');
+    const batchId = createBatch(db, messageId, null, 0);
+    const queuedJobId = createJob(db, batchId, 'bot');
+    const runningJobId = createJob(db, batchId, 'bot');
+    const waitingJobId = createJob(db, batchId, 'bot');
+    updateJobStatus(db, runningJobId, 'running');
+    updateJobStatus(db, waitingJobId, 'waiting_input');
+    db.close();
+
+    const res = await request(port, 'GET', '/api/topics', cookie);
+    expect(res.status).toBe(200);
+    const topic = res.body.find((item: any) => item.id === topicId);
+    expect(topic).toMatchObject({
+      id: topicId,
+      queued_job_count: 1,
+      running_job_count: 2,
+    });
+  });
+
   it('creates a child topic when parentTopicId is given', async () => {
     // First create a parent
     const parent = await request(port, 'POST', '/api/topics', cookie, { name: 'Parent' });
@@ -136,6 +167,99 @@ describe('POST /api/topics with parentTopicId', () => {
   it('observer cannot create topics', async () => {
     const res = await request(port, 'POST', '/api/topics', observerCookie, { name: 'Nope' });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/topics/:id/messages idempotency', () => {
+  let close: () => void;
+  let port: number;
+  let cookie: string;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-message-idempotency-'));
+    const config = writeConfig(tmpDir);
+    port = 34500 + Math.floor(Math.random() * 5000);
+    ({ close } = startServer(config, port));
+    await waitForServer(port);
+
+    const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
+    const sid = createSession(db, 'owner@localhost');
+    cookie = `teepee_session=${sid}`;
+    db.close();
+  });
+
+  afterAll(() => {
+    close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns the same persisted message for repeated client_message_id submits', async () => {
+    const topic = await request(port, 'POST', '/api/topics', cookie, { name: 'Idempotent submit' });
+    expect(topic.status).toBe(201);
+
+    const clientMessageId = 'client-msg-1';
+    const first = await request(port, 'POST', `/api/topics/${topic.body.id}/messages`, cookie, {
+      text: 'hello once',
+      clientMessageId,
+    });
+    const second = await request(port, 'POST', `/api/topics/${topic.body.id}/messages`, cookie, {
+      text: 'hello once',
+      clientMessageId,
+    });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.id).toBe(first.body.id);
+    expect(second.body.message.id).toBe(first.body.message.id);
+    expect(second.body.message.client_message_id).toBe(clientMessageId);
+
+    const messages = await request(port, 'GET', `/api/topics/${topic.body.id}/messages?limit=20`, cookie);
+    expect(messages.status).toBe(200);
+    expect(messages.body).toHaveLength(1);
+    expect(messages.body[0].client_message_id).toBe(clientMessageId);
+  });
+});
+
+describe('startup job recovery', () => {
+  let close: () => void;
+  let port: number;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-job-recovery-'));
+    const config = writeConfig(tmpDir);
+    const dbPath = path.join(tmpDir, '.teepee', 'db.sqlite');
+    const db = openDb(dbPath);
+    const topicId = createTopic(db, 'Recovery Topic');
+    const messageId = insertMessage(db, topicId, 'user', 'owner', '@bot recover me');
+    const batchId = createBatch(db, messageId, null, 0);
+    const queuedJobId = createJob(db, batchId, 'bot');
+    const runningJobId = createJob(db, batchId, 'bot');
+    const waitingJobId = createJob(db, batchId, 'bot');
+    updateJobStatus(db, runningJobId, 'running');
+    updateJobStatus(db, waitingJobId, 'waiting_input');
+    db.close();
+
+    port = 35000 + Math.floor(Math.random() * 5000);
+    ({ close } = startServer(config, port));
+    await waitForServer(port);
+  });
+
+  afterAll(() => {
+    close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('fails interrupted queued/running jobs at boot but preserves waiting_input', async () => {
+    const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
+    const rows = db.prepare('SELECT status, error FROM jobs ORDER BY id').all() as Array<{ status: string; error: string | null }>;
+    expect(rows).toEqual([
+      { status: 'failed', error: 'Server restarted before job completed' },
+      { status: 'failed', error: 'Server restarted before job completed' },
+      { status: 'waiting_input', error: null },
+    ]);
+    db.close();
   });
 });
 

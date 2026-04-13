@@ -277,11 +277,12 @@ export function validateArtifactOps(
 
 export function executeArtifactOps(
   db: DatabaseType,
-  topicId: number,
+  topicScope: number | number[],
   ops: ArtifactReadOperation[],
   previousState: ArtifactReadAccessState = { currentVersionsRead: {}, versionsRead: {} }
 ): ExecuteArtifactOpsResult {
   const results: ArtifactOpResult[] = [];
+  const readableTopicIds = normalizeTopicScope(topicScope);
   const accessState: ArtifactReadAccessState = {
     currentVersionsRead: { ...previousState.currentVersionsRead },
     versionsRead: cloneVersionsRead(previousState.versionsRead),
@@ -290,7 +291,7 @@ export function executeArtifactOps(
   for (const op of ops) {
     try {
       if (op.op === 'read-current') {
-        const version = resolveArtifactVersion(db, topicId, op.artifact_id, 'current');
+        const version = resolveArtifactVersion(db, readableTopicIds, op.artifact_id, 'current');
         accessState.currentVersionsRead[op.artifact_id] = version.version;
         recordVersionRead(accessState, op.artifact_id, version.version);
         results.push({
@@ -307,7 +308,7 @@ export function executeArtifactOps(
       }
 
       if (op.op === 'read-version') {
-        const version = resolveArtifactVersion(db, topicId, op.artifact_id, op.version);
+        const version = resolveArtifactVersion(db, readableTopicIds, op.artifact_id, op.version);
         if (op.version === 'current') {
           accessState.currentVersionsRead[op.artifact_id] = version.version;
         }
@@ -327,13 +328,13 @@ export function executeArtifactOps(
 
       const fromVersion = resolveArtifactVersion(
         db,
-        topicId,
+        readableTopicIds,
         op.artifact_id,
         op.from_version
       );
       const toVersion = resolveArtifactVersion(
         db,
-        topicId,
+        readableTopicIds,
         op.artifact_id,
         op.to_version
       );
@@ -419,7 +420,7 @@ function isVersionRef(value: unknown): value is ArtifactVersionRef {
 
 function resolveArtifactVersion(
   db: DatabaseType,
-  topicId: number,
+  readableTopicIds: number[],
   artifactId: number,
   versionRef: ArtifactVersionRef
 ): ArtifactVersionRow {
@@ -427,8 +428,9 @@ function resolveArtifactVersion(
   if (!artifact) {
     throw new Error(`Artifact ${artifactId} not found`);
   }
-  if (artifact.topic_id !== topicId) {
-    throw new Error(`Artifact ${artifactId} does not belong to topic ${topicId}`);
+  if (!readableTopicIds.includes(artifact.topic_id)) {
+    const sourceTopicId = readableTopicIds[0] ?? 'unknown';
+    throw new Error(`Artifact ${artifactId} is not readable from topic ${sourceTopicId}`);
   }
 
   const version =
@@ -443,6 +445,10 @@ function resolveArtifactVersion(
   }
 
   return version;
+}
+
+function normalizeTopicScope(topicScope: number | number[]): number[] {
+  return Array.isArray(topicScope) ? topicScope : [topicScope];
 }
 
 function summarizeDiff(fromBody: string, toBody: string): {

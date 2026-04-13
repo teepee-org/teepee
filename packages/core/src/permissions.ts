@@ -1,14 +1,14 @@
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { getUser, countRecentJobs } from './db.js';
-import { resolveRoleAgentProfile } from './config.js';
-import type { LimitsConfig, TeepeeConfig, AgentAccessProfile, UserRole } from './config.js';
+import { hasCapability, normalizeConfiguredRole, resolveRoleAgentProfile } from './config.js';
+import type { Capability, LimitsConfig, TeepeeConfig, AgentAccessProfile } from './config.js';
 
 /**
  * Check if a user can tag a specific agent, optionally scoped to a topic.
  *
  * Rules (deny-by-default, deny wins):
  * 1. user must exist and be active
- * 2. user.role is normalized to the built-in roles
+ * 2. user.role is normalized only for legacy `user -> collaborator`
  * 3. roles[role][agent] grants the effective profile
  * 4. missing role or missing agent mapping denies access
  */
@@ -31,16 +31,28 @@ export function resolveUserAgentProfile(
   const user = getUser(db, email);
   if (!user || user.status !== 'active') return null;
 
-  const role = normalizeRoleForAccess(user.role);
-  if (!role) return null;
-
+  const role = normalizeConfiguredRole(user.role);
   return resolveRoleAgentProfile(config, role, agentName);
 }
 
-function normalizeRoleForAccess(role: string): UserRole | null {
-  if (role === 'user') return 'collaborator';
-  if (role === 'owner' || role === 'collaborator' || role === 'observer') return role;
-  return null;
+export function resolveUserRole(
+  db: DatabaseType,
+  email: string
+): string | null {
+  const user = getUser(db, email);
+  if (!user || user.status !== 'active') return null;
+  return normalizeConfiguredRole(user.role);
+}
+
+export function userHasCapability(
+  db: DatabaseType,
+  email: string,
+  capability: Capability,
+  config: TeepeeConfig
+): boolean {
+  const role = resolveUserRole(db, email);
+  if (!role) return false;
+  return hasCapability(config, role, capability);
 }
 
 /**

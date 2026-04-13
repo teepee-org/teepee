@@ -34,6 +34,9 @@ function makeConfig(overrides?: Partial<TeepeeConfig> & { agents?: Record<string
     providers: { echo: { command: 'echo hello' } },
     agents,
     roles,
+    filesystem: {
+      roots: [{ id: 'workspace', kind: 'workspace', path: '.', resolvedPath: process.cwd() }],
+    },
     limits: { max_agents_per_message: 5, max_jobs_per_user_per_minute: 100, max_chain_depth: 2, max_total_jobs_per_chain: 10 },
     security: {
       sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] },
@@ -51,20 +54,24 @@ function makeConfig(overrides?: Partial<TeepeeConfig> & { agents?: Record<string
 }
 
 function legacyRolesForTest(agents: Record<string, any>): TeepeeConfig['roles'] {
-  const roles: TeepeeConfig['roles'] = { owner: {}, collaborator: {}, observer: {} };
+  const roles: TeepeeConfig['roles'] = {
+    owner: { superuser: true, agents: {} },
+    collaborator: { capabilities: ['files.workspace.access', 'messages.post'], agents: {} },
+    observer: { capabilities: ['files.workspace.access'], agents: {} },
+  };
   for (const [name, agent] of Object.entries(agents)) {
     if (agent.capability === 'disabled') continue;
     if (agent.profile === 'trusted') {
-      roles.owner[name] = 'trusted';
+      roles.owner.agents[name] = 'trusted';
       continue;
     }
     if (agent.profile === 'restricted') {
-      roles.owner[name] = 'readonly';
-      roles.collaborator[name] = 'readonly';
+      roles.owner.agents[name] = 'readonly';
+      roles.collaborator.agents[name] = 'readonly';
       continue;
     }
-    roles.owner[name] = 'readwrite';
-    roles.collaborator[name] = 'readwrite';
+    roles.owner.agents[name] = 'readwrite';
+    roles.collaborator.agents[name] = 'readwrite';
   }
   return roles;
 }
@@ -79,6 +86,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobCompleted: [],
     onJobFailed: [],
     onSystemMessage: [],
+    onRuntimeChanged: [],
   };
   return {
     calls,
@@ -90,6 +98,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobCompleted: (...args: any[]) => { calls.onJobCompleted.push(args); },
     onJobFailed: (...args: any[]) => { calls.onJobFailed.push(args); },
     onSystemMessage: (...args: any[]) => { calls.onSystemMessage.push(args); },
+    onRuntimeChanged: (...args: any[]) => { calls.onRuntimeChanged.push(args); },
   };
 }
 
@@ -132,6 +141,19 @@ function makeContainerStubRunner(): SandboxRunner {
       throw new Error('container runner should not spawn when provider sandbox config is missing');
     },
   };
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs: number = 3000
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for condition`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe('Orchestrator security', () => {
@@ -576,6 +598,178 @@ describe('Orchestrator security', () => {
     expect(job.status).toBe('done');
     expect(spawnCalls.length).toBe(1);
     expect(spawnCalls[0].options.readOnlyProject).toBe(true);
+  });
+
+  it('forces readonly profile for all jobs tagged in the same message', async () => {
+    const config = makeConfig({
+      roles: {
+        owner: { superuser: true, agents: { coder: 'trusted', reviewer: 'readwrite' } },
+        collaborator: { capabilities: ['files.workspace.access', 'messages.post'], agents: { coder: 'readwrite', reviewer: 'readwrite' } },
+        observer: { capabilities: ['files.workspace.access'], agents: {} },
+      } as any,
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    const topicId = createTopic(db, 'test');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder @reviewer analyze this');
+    await waitForCondition(() => callbacks.calls.onJobCompleted.length === 2);
+
+    const jobs = db.prepare('SELECT agent_name, effective_profile, effective_mode FROM jobs ORDER BY id').all() as any[];
+    expect(jobs).toEqual([
+      { agent_name: 'coder', effective_profile: 'readonly', effective_mode: 'sandbox' },
+      { agent_name: 'reviewer', effective_profile: 'readonly', effective_mode: 'sandbox' },
+    ]);
+  });
+
+  it('blocks readonly work queued behind a writer barrier', async () => {
+    const eventLogPath = path.join(tmpDir, 'barrier-order.log');
+    fs.writeFileSync(
+      path.join(tmpDir, 'reader-a.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'reader_a:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'reader_a:end\\n');",
+        "  console.log('reader a done');",
+        "}, 80);",
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'writer.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'writer:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'writer:end\\n');",
+        "  console.log('writer done');",
+        "}, 40);",
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'reader-b.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'reader_b:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'reader_b:end\\n');",
+        "  console.log('reader b done');",
+        "}, 20);",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        reader_a_provider: { command: 'node reader-a.js' },
+        writer_provider: { command: 'node writer.js' },
+        reader_b_provider: { command: 'node reader-b.js' },
+      },
+      agents: {
+        reader_a: { provider: 'reader_a_provider' },
+        writer: { provider: 'writer_provider' },
+        reader_b: { provider: 'reader_b_provider' },
+      },
+      roles: {
+        owner: { superuser: true, agents: { reader_a: 'readonly', writer: 'readwrite', reader_b: 'readonly' } },
+        collaborator: { capabilities: ['files.workspace.access', 'messages.post'], agents: { reader_a: 'readonly', writer: 'readwrite', reader_b: 'readonly' } },
+        observer: { capabilities: ['files.workspace.access'], agents: {} },
+      } as any,
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    const topicId = createTopic(db, 'test');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@reader_a inspect');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@writer change');
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@reader_b inspect');
+    await waitForCondition(() => callbacks.calls.onJobCompleted.length === 3, 5000);
+
+    const logLines = fs.readFileSync(eventLogPath, 'utf-8').trim().split('\n');
+    expect(logLines.indexOf('reader_a:end')).toBeLessThan(logLines.indexOf('writer:start'));
+    expect(logLines.indexOf('writer:end')).toBeLessThan(logLines.indexOf('reader_b:start'));
+  });
+
+  it('prioritizes child jobs in the active chain ahead of external queued writers', async () => {
+    const eventLogPath = path.join(tmpDir, 'chain-order.log');
+    fs.writeFileSync(
+      path.join(tmpDir, 'architect-chain.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'architect:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'architect:end\\n');",
+        "  console.log('@coder implement it');",
+        "}, 40);",
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'coder-chain.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'coder:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'coder:end\\n');",
+        "  console.log('coder done');",
+        "}, 40);",
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'writer-external.js'),
+      [
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(eventLogPath)};`,
+        "fs.appendFileSync(log, 'external_writer:start\\n');",
+        "setTimeout(() => {",
+        "  fs.appendFileSync(log, 'external_writer:end\\n');",
+        "  console.log('external done');",
+        "}, 30);",
+      ].join('\n')
+    );
+
+    const config = makeConfig({
+      providers: {
+        architect_provider: { command: 'node architect-chain.js' },
+        coder_provider: { command: 'node coder-chain.js' },
+        writer_provider: { command: 'node writer-external.js' },
+      },
+      agents: {
+        architect: { provider: 'architect_provider', chain_policy: 'delegate_with_origin_policy' },
+        coder: { provider: 'coder_provider' },
+        writer: { provider: 'writer_provider' },
+      },
+      roles: {
+        owner: { superuser: true, agents: { architect: 'readonly', coder: 'readwrite', writer: 'readwrite' } },
+        collaborator: { capabilities: ['files.workspace.access', 'messages.post'], agents: { architect: 'readonly', coder: 'readwrite', writer: 'readwrite' } },
+        observer: { capabilities: ['files.workspace.access'], agents: {} },
+      } as any,
+    });
+    const callbacks = makeCallbacks();
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = makeHostLikeSandboxRunner();
+    (orch as any).sandboxBackend = 'bubblewrap';
+
+    const topicId = createTopic(db, 'test');
+    const firstRun = orch.handleMessage(topicId, 'owner@test.com', 'owner', '@architect analyze');
+    await waitForCondition(() => fs.existsSync(eventLogPath) && fs.readFileSync(eventLogPath, 'utf-8').includes('architect:start'));
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@writer do external work');
+    await firstRun;
+    await waitForCondition(() => callbacks.calls.onJobCompleted.length === 3, 5000);
+
+    const logLines = fs.readFileSync(eventLogPath, 'utf-8').trim().split('\n');
+    expect(logLines.indexOf('architect:end')).toBeLessThan(logLines.indexOf('coder:start'));
+    expect(logLines.indexOf('coder:end')).toBeLessThan(logLines.indexOf('external_writer:start'));
   });
 
   it('supports lazy artifact reads before updating the current head', async () => {

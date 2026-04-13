@@ -4,7 +4,7 @@ import type { CommandDef, CommandContext } from './types.js';
 export const topicLanguageCommand: CommandDef = {
   name: 'topic.language',
   help: '/topic language <lang> — set topic language',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.language.set',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const language = params.language;
     if (!language || typeof language !== 'string') {
@@ -21,7 +21,7 @@ export const topicLanguageCommand: CommandDef = {
 export const topicRenameCommand: CommandDef = {
   name: 'topic.rename',
   help: '/topic rename <name> — rename current topic',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.rename',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const name = params.name;
     if (!name || typeof name !== 'string') {
@@ -39,7 +39,7 @@ export const topicRenameCommand: CommandDef = {
 export const topicArchiveCommand: CommandDef = {
   name: 'topic.archive',
   help: '/topic archive — archive current topic',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.archive',
   execute(ctx: CommandContext) {
     archiveTopic(ctx.db, ctx.topicId);
     const sysMsg = 'Topic archived.';
@@ -52,7 +52,7 @@ export const topicArchiveCommand: CommandDef = {
 export const topicAliasCommand: CommandDef = {
   name: 'topic.alias',
   help: '/alias @agent @short — create alias',
-  minRole: 'owner',
+  requiredCapability: 'topics.alias.set',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const { agent, alias } = params;
     if (!agent || !alias) {
@@ -75,7 +75,7 @@ function notifyTopicsChanged(ctx: CommandContext) {
 export const topicMoveRootCommand: CommandDef = {
   name: 'topic.move.root',
   help: '/topic move root — move current topic to root level',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.move',
   execute(ctx: CommandContext) {
     try {
       moveTopicToRoot(ctx.db, ctx.topicId);
@@ -93,7 +93,7 @@ export const topicMoveRootCommand: CommandDef = {
 export const topicMoveIntoCommand: CommandDef = {
   name: 'topic.move.into',
   help: '/topic move into <topic-id> — move current topic inside target topic',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.move',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const targetId = Number(params.targetId);
     if (!targetId || isNaN(targetId)) {
@@ -115,7 +115,7 @@ export const topicMoveIntoCommand: CommandDef = {
 export const topicMoveBeforeCommand: CommandDef = {
   name: 'topic.move.before',
   help: '/topic move before <topic-id> — move current topic before target topic',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.move',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const targetId = Number(params.targetId);
     if (!targetId || isNaN(targetId)) {
@@ -137,7 +137,7 @@ export const topicMoveBeforeCommand: CommandDef = {
 export const topicMoveAfterCommand: CommandDef = {
   name: 'topic.move.after',
   help: '/topic move after <topic-id> — move current topic after target topic',
-  minRole: 'collaborator',
+  requiredCapability: 'topics.move',
   execute(ctx: CommandContext, params: Record<string, any>) {
     const targetId = Number(params.targetId);
     if (!targetId || isNaN(targetId)) {

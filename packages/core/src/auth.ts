@@ -305,51 +305,54 @@ export function promoteToOwner(
   email: string,
   actorEmail?: string
 ): { ok: boolean; error?: string } {
-  const user = getUser(db, email);
-  if (!user) return { ok: false, error: 'User not found' };
-  if (user.role === 'owner') return { ok: false, error: 'Already an owner' };
-  if (user.status !== 'active') return { ok: false, error: 'User is not active' };
-
-  db.prepare(`UPDATE users SET role = 'owner' WHERE email = ?`).run(email);
-  emitEvent(db, 'user.owner_promoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null }));
-  return { ok: true };
+  const result = setUserRole(db, email, 'owner', actorEmail);
+  if (result.ok) {
+    emitEvent(db, 'user.owner_promoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null }));
+  }
+  return result;
 }
 
 export function demoteFromOwner(
   db: DatabaseType,
   email: string,
-  actorEmail?: string
+  actorEmail?: string,
+  targetRole: string = 'collaborator'
 ): { ok: boolean; error?: string } {
   const user = getUser(db, email);
   if (!user) return { ok: false, error: 'User not found' };
   if (user.role !== 'owner') return { ok: false, error: 'User is not an owner' };
-  if (isLastOwner(db, email)) return { ok: false, error: 'Cannot demote the last owner' };
+  if (targetRole === 'owner') return { ok: false, error: 'Target role must not be owner' };
 
-  db.prepare(`UPDATE users SET role = 'collaborator' WHERE email = ?`).run(email);
-  emitEvent(db, 'user.owner_demoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null }));
-  return { ok: true };
+  const result = setUserRole(db, email, targetRole, actorEmail);
+  if (result.ok) {
+    emitEvent(db, 'user.owner_demoted', null, JSON.stringify({ email, actor_email: actorEmail ?? null, target_role: targetRole }));
+  }
+  return result;
 }
 
 export function setUserRole(
   db: DatabaseType,
   email: string,
-  role: 'owner' | 'collaborator' | 'observer',
+  role: string,
   actorEmail?: string
 ): { ok: boolean; error?: string } {
   const user = getUser(db, email);
   if (!user) return { ok: false, error: 'User not found' };
-  if (user.role === role) return { ok: true };
+  const normalizedRole = role === 'user' ? 'collaborator' : role;
+  const nextRole = normalizedRole.trim();
+  if (!nextRole) return { ok: false, error: 'Role cannot be empty' };
+  if (user.role === nextRole) return { ok: true };
   if (user.status === 'revoked') return { ok: false, error: 'Cannot change role for a revoked user' };
-  if (user.role === 'owner' && role !== 'owner' && isLastOwner(db, email)) {
+  if (user.role === 'owner' && nextRole !== 'owner' && isLastOwner(db, email)) {
     return { ok: false, error: 'Cannot demote the last owner' };
   }
 
-  db.prepare(`UPDATE users SET role = ? WHERE email = ?`).run(role, email);
+  db.prepare(`UPDATE users SET role = ? WHERE email = ?`).run(nextRole, email);
   emitEvent(db, 'user.role_changed', null, JSON.stringify({
     email,
     actor_email: actorEmail ?? null,
     old_role: user.role,
-    new_role: role,
+    new_role: nextRole,
   }));
   return { ok: true };
 }

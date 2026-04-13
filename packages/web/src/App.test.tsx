@@ -53,17 +53,34 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', MockWS);
 
   // Mock fetch
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (url.includes('/auth/session')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SESSION) });
     }
     if (url.includes('/input-requests')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_INPUT_REQUESTS) });
     }
+    if (url.includes('/jobs?status=active')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    }
     if (url.includes('/artifacts')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     }
     if (url.includes('/api/topics') && !url.includes('messages')) {
+      if (init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            id: 2,
+            name: 'Sub-Topic',
+            language: null,
+            parent_topic_id: 1,
+            sort_order: 2,
+            archived: 0,
+            archived_at: null,
+          }),
+        });
+      }
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_TOPICS) });
     }
     if (url.includes('/api/agents')) {
@@ -79,6 +96,24 @@ beforeEach(() => {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PRESENCE) });
     }
     if (url.includes('/messages')) {
+      if (init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body || '{}'));
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            id: 2,
+            message: {
+              id: 2,
+              topic_id: 1,
+              author_type: 'user',
+              author_name: 'owner',
+              body: payload.text || 'sent',
+              client_message_id: payload.clientMessageId ?? null,
+              created_at: '2026-01-01T00:00:01Z',
+            },
+          }),
+        });
+      }
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MESSAGES) });
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
@@ -293,6 +328,139 @@ async function sendCommand(input: HTMLInputElement, cmd: string) {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
   });
 }
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('message composer delivery state', () => {
+  it('renders a pending user message immediately and reconciles it on ack', async () => {
+    const deferred = createDeferred<any>();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/auth/session')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SESSION) });
+      }
+      if (url.includes('/input-requests')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_INPUT_REQUESTS) });
+      }
+      if (url.includes('/jobs?status=active')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('/api/topics') && !url.includes('messages')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_TOPICS) });
+      }
+      if (url.includes('/api/agents')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_AGENTS) });
+      }
+      if (url.includes('/api/project')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) });
+      }
+      if (url.includes('/api/presence')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PRESENCE) });
+      }
+      if (url.includes('/messages')) {
+        if (init?.method === 'POST') {
+          const payload = JSON.parse(String(init.body || '{}'));
+          return deferred.promise.then(() => ({
+            ok: true,
+            json: () => Promise.resolve({
+              id: 2,
+              message: {
+                id: 2,
+                topic_id: 1,
+                author_type: 'user',
+                author_name: 'owner',
+                body: payload.text,
+                client_message_id: payload.clientMessageId,
+                created_at: '2026-01-01T00:00:01Z',
+              },
+            }),
+          }));
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MESSAGES) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+
+    const input = await openTopicAndGetInput();
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'pending hello' } });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('pending hello');
+      expect(document.body.textContent).toContain('sending');
+    });
+
+    await act(async () => {
+      deferred.resolve({});
+      await deferred.promise;
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('pending hello');
+      expect(document.body.textContent).not.toContain('sending');
+    });
+  });
+
+  it('marks the optimistic message as failed when POST fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/auth/session')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SESSION) });
+      }
+      if (url.includes('/input-requests')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_INPUT_REQUESTS) });
+      }
+      if (url.includes('/jobs?status=active')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('/api/topics') && !url.includes('messages')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_TOPICS) });
+      }
+      if (url.includes('/api/agents')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_AGENTS) });
+      }
+      if (url.includes('/api/project')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) });
+      }
+      if (url.includes('/api/presence')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PRESENCE) });
+      }
+      if (url.includes('/messages')) {
+        if (init?.method === 'POST') {
+          return Promise.reject(new Error('network down'));
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MESSAGES) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+
+    const input = await openTopicAndGetInput();
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'will fail' } });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('will fail');
+      expect(document.body.textContent).toContain('failed');
+      expect(document.body.textContent).toContain('network down');
+    });
+  });
+});
 
 describe('/topic new command', () => {
   it('creates a child topic under the current topic', async () => {

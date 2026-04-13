@@ -10,12 +10,10 @@ export interface UserRow {
   revoked_at?: string | null;
 }
 
-const VALID_USER_ROLES = new Set(['owner', 'collaborator', 'observer']);
-
 export function normalizeUserRole(role: string): string {
-  const normalized = role === 'user' ? 'collaborator' : role;
-  if (!VALID_USER_ROLES.has(normalized)) {
-    throw new Error(`Invalid user role: ${role}. Use owner, collaborator, or observer`);
+  const normalized = role === 'user' ? 'collaborator' : role.trim();
+  if (!normalized) {
+    throw new Error('Invalid user role: role cannot be empty');
   }
   return normalized;
 }

@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   resolveReference,
+  fetchFileAtRoot,
   fetchWorkspaceFile,
   fetchArtifact,
   fetchArtifactVersion,
   fetchArtifactVersions,
+  fileDownloadUrl,
   workspaceDownloadUrl,
   artifactDownloadUrl,
   type ResolvedReference,
@@ -40,11 +42,16 @@ export function ReferenceViewer({ href, projectPath, onClose, onOpenReference }:
         const resolved = await resolveReference(href);
         if (cancelled) return;
 
-        if (resolved.targetType === 'workspace-file' && resolved.fetch.kind === 'workspace') {
+        if (
+          (resolved.targetType === 'workspace-file' && resolved.fetch.kind === 'workspace') ||
+          (resolved.targetType === 'filesystem-file' && resolved.fetch.kind === 'filesystem')
+        ) {
           if (resolved.mime.startsWith('image/') || resolved.mime === 'application/pdf') {
             setState({ status: 'not-previewable', resolved });
           } else {
-            const file = await fetchWorkspaceFile(resolved.fetch.path);
+            const file = resolved.fetch.kind === 'workspace'
+              ? await fetchWorkspaceFile(resolved.fetch.path)
+              : await fetchFileAtRoot(resolved.fetch.rootId, resolved.fetch.path);
             if (cancelled) return;
             if (file.binary) {
               setState({ status: 'not-previewable', resolved });
@@ -124,9 +131,13 @@ export function ReferenceViewer({ href, projectPath, onClose, onOpenReference }:
   if (state.status === 'not-previewable') {
     const downloadUrl = state.resolved.fetch.kind === 'workspace'
       ? workspaceDownloadUrl(state.resolved.fetch.path, 'attachment')
+      : state.resolved.fetch.kind === 'filesystem'
+        ? fileDownloadUrl(state.resolved.fetch.rootId, state.resolved.fetch.path, 'attachment')
       : undefined;
     const inlineUrl = state.resolved.fetch.kind === 'workspace'
       ? workspaceDownloadUrl(state.resolved.fetch.path, 'inline')
+      : state.resolved.fetch.kind === 'filesystem'
+        ? fileDownloadUrl(state.resolved.fetch.rootId, state.resolved.fetch.path, 'inline')
       : undefined;
     const isImage = state.resolved.mime.startsWith('image/');
     const isPdf = state.resolved.mime === 'application/pdf';
@@ -196,6 +207,8 @@ export function ReferenceViewer({ href, projectPath, onClose, onOpenReference }:
   const highlightedLines = isMarkdown ? null : highlightCodeAsLines(content, resolved.language);
   const downloadUrl = resolved.fetch.kind === 'workspace'
     ? workspaceDownloadUrl(resolved.fetch.path, 'attachment')
+    : resolved.fetch.kind === 'filesystem'
+      ? fileDownloadUrl(resolved.fetch.rootId, resolved.fetch.path, 'attachment')
     : undefined;
 
   return (
@@ -204,7 +217,11 @@ export function ReferenceViewer({ href, projectPath, onClose, onOpenReference }:
         <div className="reference-viewer-title">
           <h2>{resolved.displayName}</h2>
           <span className="reference-viewer-meta">
-            {resolved.fetch.kind === 'workspace' ? resolved.fetch.path : ''} · {resolved.language}
+            {resolved.fetch.kind === 'workspace'
+              ? resolved.fetch.path
+              : resolved.fetch.kind === 'filesystem'
+                ? `${resolved.fetch.rootId}/${resolved.fetch.path}`
+                : ''} · {resolved.language}
           </span>
         </div>
         <div className="reference-viewer-actions">

@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import type { TeepeeConfig, ExecutionMode, AgentAccessProfile } from './config.js';
-import { resolveRoleAgentProfile } from './config.js';
+import type { TeepeeConfig, ExecutionMode, AgentAccessProfile, UserRole } from './config.js';
+import { hasCapability, normalizeConfiguredRole, resolveRoleAgentProfile } from './config.js';
 import {
   insertMessage,
   insertMention,
@@ -21,7 +21,8 @@ import {
   getUser,
   getUserById,
 } from './db.js';
-import { listTopicArtifactContext } from './db/artifacts.js';
+import { listScopedArtifactContext } from './db/artifacts.js';
+import { getTopicLineage } from './db/topics.js';
 import { parseMentions, resolveAliases } from './mentions.js';
 import { filterAllowedAgents } from './permissions.js';
 import { buildContext, runAgent, type JobResult } from './executor.js';
@@ -40,7 +41,6 @@ import {
   validateArtifactOps,
   type ArtifactReadAccessState,
 } from './artifacts/ops.js';
-import type { UserRole } from './commands/types.js';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
 import { detectSandboxAvailability } from './sandbox/detect.js';
 import {
@@ -65,9 +65,26 @@ export interface OrchestratorCallbacks {
   onJobCompleted(topicId: number, jobId: number, agentName: string, messageId: number): void;
   onJobFailed(topicId: number, jobId: number, agentName: string, error: string): void;
   onSystemMessage(topicId: number, text: string): void;
+  onRuntimeChanged?(topicId: number): void;
 }
 
 const MAX_ARTIFACT_REPAIR_ROUNDS = 1;
+
+interface PendingJobRow {
+  job_id: number;
+  batch_id: number;
+  agent_name: string;
+  status: string;
+  requested_by_email: string | null;
+  requested_by_user_id: string | null;
+  effective_mode: ExecutionMode | null;
+  effective_profile: AgentAccessProfile | null;
+  trigger_message_id: number;
+  chain_root_batch_id: number;
+  chain_depth: number;
+  topic_id: number;
+  language: string | null;
+}
 
 export class Orchestrator {
   private db: DatabaseType;
@@ -78,8 +95,10 @@ export class Orchestrator {
   private sandboxRunner: SandboxRunner;
   private sandboxAvailable: boolean;
   private sandboxBackend: string;
-  // Track active jobs per agent per topic
-  private activeJobs = new Map<string, Promise<void>>();
+  private schedulerDrainPromise: Promise<void> | null = null;
+  private schedulerNeedsRerun = false;
+  private activeWriterChainRootId: number | null = null;
+  private runningJobs = new Map<number, Promise<void>>();
 
   constructor(
     db: DatabaseType,
@@ -172,19 +191,33 @@ export class Orchestrator {
 
     if (allowed.length === 0) return;
 
-    // Create batch and execute
-    await this.executeBatch(topicId, messageId, allowed, userEmail, null, 0);
+    const rootId = await this.enqueueBatch(topicId, messageId, allowed, userEmail, null, 0, undefined, limitedAgents.length > 1);
+    if (rootId !== null) {
+      await this.waitForChainToPauseOrFinish(rootId);
+    }
   }
 
-  private async executeBatch(
+  private async enqueueBatch(
     topicId: number,
     triggerMessageId: number,
     agents: string[],
     userEmail: string,
     chainRootBatchId: number | null,
     chainDepth: number,
-    requesterRole?: UserRole
-  ): Promise<void> {
+    requesterRole?: UserRole,
+    forceReadonlyBatch: boolean = agents.length > 1
+  ): Promise<number | null> {
+    const requesterUserId = getUser(this.db, userEmail)?.id ?? null;
+
+    const inheritedRole: UserRole = requesterRole ?? this.resolveUserRole(userEmail);
+    const existingChainJobs = chainRootBatchId ? countChainJobs(this.db, chainRootBatchId) : 0;
+    if (existingChainJobs + agents.length > this.config.limits.max_total_jobs_per_chain) {
+      const sysMsg = 'Chain job limit reached.';
+      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
+      this.callbacks.onSystemMessage(topicId, sysMsg);
+      return null;
+    }
+
     const batchId = createBatch(
       this.db,
       triggerMessageId,
@@ -192,185 +225,314 @@ export class Orchestrator {
       chainDepth
     );
     const rootId = chainRootBatchId ?? batchId;
-    const requesterUserId = getUser(this.db, userEmail)?.id ?? null;
-
-    // Check total chain jobs
-    const totalJobs = countChainJobs(this.db, rootId);
-    if (totalJobs >= this.config.limits.max_total_jobs_per_chain) {
-      const sysMsg = 'Chain job limit reached.';
-      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
-      this.callbacks.onSystemMessage(topicId, sysMsg);
-      return;
+    if (chainRootBatchId !== null) {
+      this.activeWriterChainRootId = chainRootBatchId;
     }
 
-    // Resolve requester role (once per batch, inherited by chains)
-    const role: UserRole = requesterRole ?? this.resolveUserRole(userEmail);
+    for (const agent of agents) {
+      const resolvedProfile = resolveRoleAgentProfile(this.config, inheritedRole, agent);
+      const effectiveProfile = forceReadonlyBatch ? 'readonly' : resolvedProfile;
+      const policy = resolveExecutionPolicy(effectiveProfile);
+      createJob(this.db, batchId, agent, {
+        requested_by_email: userEmail,
+        requested_by_user_id: requesterUserId,
+        effective_mode: policy.mode,
+        effective_profile: effectiveProfile,
+      });
+    }
 
-    // Create jobs
-    const jobIds = agents.map((agent) => ({
-      id: createJob(this.db, batchId, agent),
-      agent,
-    }));
+    this.callbacks.onRuntimeChanged?.(topicId);
+    await this.drainScheduler();
+    return rootId;
+  }
 
-    // Resolve language
-    const topic = getTopic(this.db, topicId);
-    const language = topic?.language ?? this.config.teepee.language;
-
-    // Execute in parallel
-    const promises = jobIds.map(({ id: jobId, agent }) =>
-      this.executeJob(
-        jobId,
-        agent,
-        topicId,
-        triggerMessageId,
-        language,
-        userEmail,
-        requesterUserId,
-        rootId,
-        chainDepth,
-        role
-      )
-    );
-
-    await Promise.all(promises);
+  private async waitForChainToPauseOrFinish(chainRootBatchId: number): Promise<void> {
+    for (;;) {
+      const row = this.db.prepare(
+        `SELECT COUNT(*) as cnt
+           FROM jobs j
+           JOIN invocation_batches b ON b.id = j.batch_id
+          WHERE COALESCE(b.chain_root_batch_id, b.id) = ?
+            AND j.status IN ('queued', 'running')`
+      ).get(chainRootBatchId) as { cnt: number };
+      if (Number(row?.cnt ?? 0) === 0) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 
   private resolveUserRole(email: string): UserRole {
     const user = getUser(this.db, email);
-    if (!user) return 'observer';
-    if (user.role === 'owner') return 'owner';
-    if (user.role === 'observer') return 'observer';
-    return 'collaborator';
+    if (!user) return '__missing__';
+    return normalizeConfiguredRole(user.role);
   }
 
-  private async executeJob(
-    jobId: number,
-    agentName: string,
-    topicId: number,
-    triggerMessageId: number,
-    language: string,
-    userEmail: string,
-    requesterUserId: string | null,
-    chainRootBatchId: number,
-    chainDepth: number,
-    requesterRole: UserRole
-  ): Promise<void> {
-    // Wait for any active job for this agent in this topic
-    const key = `${agentName}:${topicId}`;
-    const prev = this.activeJobs.get(key);
-    if (prev) await prev;
+  private async drainScheduler(): Promise<void> {
+    if (this.schedulerDrainPromise) {
+      this.schedulerNeedsRerun = true;
+      await this.schedulerDrainPromise;
+      return;
+    }
 
-    const jobPromise = this.runJob(
-      jobId,
-      agentName,
-      topicId,
-      triggerMessageId,
-      language,
-      userEmail,
-      requesterUserId,
-      chainRootBatchId,
-      chainDepth,
-      requesterRole
-    );
-    this.activeJobs.set(key, jobPromise);
+    do {
+      this.schedulerNeedsRerun = false;
+      this.schedulerDrainPromise = this.runSchedulerLoop().finally(() => {
+        this.schedulerDrainPromise = null;
+      });
+      await this.schedulerDrainPromise;
+    } while (this.schedulerNeedsRerun);
+  }
 
-    try {
-      await jobPromise;
-    } finally {
-      if (this.activeJobs.get(key) === jobPromise) {
-        this.activeJobs.delete(key);
+  private async runSchedulerLoop(): Promise<void> {
+    for (;;) {
+      const started = this.startSchedulableJobs();
+      if (!started) {
+        return;
       }
+      await Promise.resolve();
     }
   }
 
-  private async runJob(
-    jobId: number,
-    agentName: string,
-    topicId: number,
-    triggerMessageId: number,
-    language: string,
-    userEmail: string,
-    requesterUserId: string | null,
-    chainRootBatchId: number,
-    chainDepth: number,
-    requesterRole: UserRole
-  ): Promise<void> {
-    // Resolve execution policy
-    const agentConfig = this.config.agents[agentName];
-    const providerConfig = this.config.providers[agentConfig.provider];
-    const agentProfile = resolveRoleAgentProfile(this.config, requesterRole, agentName);
-    const policy = resolveExecutionPolicy(agentProfile);
+  private startSchedulableJobs(): boolean {
+    const runningWriter = this.findRunningWriterJob();
+    if (runningWriter) {
+      this.activeWriterChainRootId = runningWriter.chain_root_batch_id;
+      return this.startJobsForScope(runningWriter.chain_root_batch_id);
+    }
 
-    // Record execution metadata
-    const effectiveMode: ExecutionMode = policy.mode;
-    const effectiveProfile: AgentAccessProfile | null = agentProfile;
+    if (this.activeWriterChainRootId !== null) {
+      if (this.hasPendingJobsForChain(this.activeWriterChainRootId)) {
+        return this.startJobsForScope(this.activeWriterChainRootId);
+      }
+      this.activeWriterChainRootId = null;
+      return true;
+    }
+
+    return this.startJobsForScope(null);
+  }
+
+  private startJobsForScope(chainRootBatchId: number | null): boolean {
+    const pending = this.listPendingJobs(chainRootBatchId);
+    if (pending.length === 0) {
+      return false;
+    }
+
+    const firstWriterIndex = pending.findIndex((job) => isWriteProfile(job.effective_profile));
+    const readablePrefix = firstWriterIndex === -1
+      ? pending
+      : pending.slice(0, firstWriterIndex);
+
+    const queuedReaders = readablePrefix.filter((job) => job.status === 'queued');
+    if (queuedReaders.length > 0) {
+      for (const job of queuedReaders) {
+        this.startQueuedJob(job);
+      }
+      return true;
+    }
+
+    if (firstWriterIndex !== -1) {
+      const firstWriter = pending[firstWriterIndex];
+      if (firstWriter.status === 'queued' && firstWriterIndex === 0) {
+        this.activeWriterChainRootId = firstWriter.chain_root_batch_id;
+        this.startQueuedJob(firstWriter);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private startQueuedJob(job: PendingJobRow): void {
+    updateJobStatus(this.db, job.job_id, 'running', {
+      requested_by_email: job.requested_by_email ?? undefined,
+      requested_by_user_id: job.requested_by_user_id ?? undefined,
+      effective_mode: job.effective_mode ?? undefined,
+      effective_profile: job.effective_profile ?? undefined,
+      waiting_request_id: null,
+    });
+    this.callbacks.onRuntimeChanged?.(job.topic_id);
+
+    const requesterRole = this.resolveUserRole(
+      job.requested_by_email ?? getUserByIdOrThrow(this.db, job.requested_by_user_id!).email
+    );
+    const language = job.language ?? this.config.teepee.language;
+    const effectiveMode = (job.effective_mode ?? 'disabled') as ExecutionMode;
+    const effectiveProfile = job.effective_profile;
+
+    const jobPromise = this.runJob({
+      jobId: job.job_id,
+      agentName: job.agent_name,
+      topicId: job.topic_id,
+      triggerMessageId: job.trigger_message_id,
+      language,
+      userEmail: job.requested_by_email ?? getUserByIdOrThrow(this.db, job.requested_by_user_id!).email,
+      requesterUserId: job.requested_by_user_id,
+      chainRootBatchId: job.chain_root_batch_id,
+      chainDepth: job.chain_depth,
+      requesterRole,
+      effectiveMode,
+      effectiveProfile,
+    }).finally(() => {
+      this.runningJobs.delete(job.job_id);
+      this.callbacks.onRuntimeChanged?.(job.topic_id);
+      void this.drainScheduler();
+    });
+
+    this.runningJobs.set(job.job_id, jobPromise);
+    void jobPromise;
+  }
+
+  private listPendingJobs(chainRootBatchId: number | null): PendingJobRow[] {
+    const scopedWhere = chainRootBatchId === null
+      ? ''
+      : 'AND COALESCE(b.chain_root_batch_id, b.id) = ?';
+    return this.db.prepare(
+      `SELECT
+         j.id as job_id,
+         j.batch_id,
+         j.agent_name,
+         j.status,
+         j.requested_by_email,
+         j.requested_by_user_id,
+         j.effective_mode,
+         j.effective_profile,
+         b.trigger_message_id,
+         COALESCE(b.chain_root_batch_id, b.id) as chain_root_batch_id,
+         b.chain_depth,
+         t.id as topic_id,
+         t.language
+       FROM jobs j
+       JOIN invocation_batches b ON b.id = j.batch_id
+       JOIN messages m ON m.id = b.trigger_message_id
+       JOIN topics t ON t.id = m.topic_id
+      WHERE j.status IN ('queued', 'running', 'waiting_input')
+        ${scopedWhere}
+      ORDER BY j.id ASC`
+    ).all(...(chainRootBatchId === null ? [] : [chainRootBatchId])) as PendingJobRow[];
+  }
+
+  private findRunningWriterJob(): PendingJobRow | null {
+    return this.db.prepare(
+      `SELECT
+         j.id as job_id,
+         j.batch_id,
+         j.agent_name,
+         j.status,
+         j.requested_by_email,
+         j.requested_by_user_id,
+         j.effective_mode,
+         j.effective_profile,
+         b.trigger_message_id,
+         COALESCE(b.chain_root_batch_id, b.id) as chain_root_batch_id,
+         b.chain_depth,
+         t.id as topic_id,
+         t.language
+       FROM jobs j
+       JOIN invocation_batches b ON b.id = j.batch_id
+       JOIN messages m ON m.id = b.trigger_message_id
+       JOIN topics t ON t.id = m.topic_id
+      WHERE j.status IN ('running', 'waiting_input')
+        AND j.effective_profile IN ('readwrite', 'trusted')
+      ORDER BY j.id ASC
+      LIMIT 1`
+    ).get() as PendingJobRow | null;
+  }
+
+  private hasPendingJobsForChain(chainRootBatchId: number): boolean {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) as cnt
+         FROM jobs j
+         JOIN invocation_batches b ON b.id = j.batch_id
+        WHERE COALESCE(b.chain_root_batch_id, b.id) = ?
+          AND j.status IN ('queued', 'running', 'waiting_input')`
+    ).get(chainRootBatchId) as { cnt: number };
+    return Number(row?.cnt ?? 0) > 0;
+  }
+
+  private async runJob(params: {
+    jobId: number;
+    agentName: string;
+    topicId: number;
+    triggerMessageId: number;
+    language: string;
+    userEmail: string;
+    requesterUserId: string | null;
+    chainRootBatchId: number;
+    chainDepth: number;
+    requesterRole: UserRole;
+    effectiveMode: ExecutionMode;
+    effectiveProfile: AgentAccessProfile | null;
+  }): Promise<void> {
+    const agentConfig = this.config.agents[params.agentName];
+    const providerConfig = this.config.providers[agentConfig.provider];
+    const policy = resolveExecutionPolicy(params.effectiveProfile);
 
     // Block disabled agents — persist audit metadata even on denial
-    if (effectiveMode === 'disabled') {
-      const error = `Agent '${agentName}' is disabled: ${policy.reason}`;
-      updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, requested_by_user_id: requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
-      emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, requester_role: requesterRole, effective_mode: effectiveMode, effective_profile: effectiveProfile }));
-      this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+    if (params.effectiveMode === 'disabled') {
+      const error = `Agent '${params.agentName}' is disabled: ${policy.reason}`;
+      updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
+      emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
+      this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
       return;
     }
 
     // Validate sandbox availability when required — persist audit metadata on fail-closed
-    if (effectiveMode === 'sandbox') {
-      const sandboxError = validateSandboxAvailability(effectiveMode, this.sandboxAvailable);
+    if (params.effectiveMode === 'sandbox') {
+      const sandboxError = validateSandboxAvailability(params.effectiveMode, this.sandboxAvailable);
       if (sandboxError) {
         const error = sandboxError;
-        updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, requested_by_user_id: requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
-        emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, requester_role: requesterRole, effective_mode: effectiveMode, effective_profile: effectiveProfile }));
-        this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+        updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
+        emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
+        this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
         return;
       }
 
       if (this.sandboxRunner.name === 'container' && !providerConfig.sandbox?.image) {
         const error = `Sandbox backend 'container' requires provider '${agentConfig.provider}' to define providers.${agentConfig.provider}.sandbox.image`;
-        updateJobStatus(this.db, jobId, 'failed', { error, requested_by_email: userEmail, requested_by_user_id: requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
-        emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error, requested_by: userEmail, requester_role: requesterRole, effective_mode: effectiveMode, effective_profile: effectiveProfile }));
-        this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+        updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
+        emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
+        this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
         return;
       }
     }
 
     // Create per-job output directory
-    const jobOutputDir = path.join(os.tmpdir(), 'teepee', 'jobs', String(jobId), 'out');
+    const jobOutputDir = path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId), 'out');
     fs.mkdirSync(path.join(jobOutputDir, 'files'), { recursive: true });
 
     try {
-    // Start
-    updateJobStatus(this.db, jobId, 'running', { requested_by_email: userEmail, requested_by_user_id: requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
-    emitEvent(this.db, 'agent.job.started', topicId, JSON.stringify({
-      job_id: jobId, agent: agentName, requested_by: userEmail, requester_role: requesterRole, effective_mode: effectiveMode, effective_profile: effectiveProfile,
-      sandbox_backend: effectiveMode === 'sandbox' ? this.sandboxBackend : undefined,
+    emitEvent(this.db, 'agent.job.started', params.topicId, JSON.stringify({
+      job_id: params.jobId, agent: params.agentName, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile,
+      sandbox_backend: params.effectiveMode === 'sandbox' ? this.sandboxBackend : undefined,
     }));
-    this.callbacks.onJobStarted(topicId, jobId, agentName);
-    logUsage(this.db, userEmail, agentName, jobId);
+    this.callbacks.onJobStarted(params.topicId, params.jobId, params.agentName);
+    logUsage(this.db, params.userEmail, params.agentName, params.jobId);
 
     const command = providerConfig.command;
-    if (effectiveMode === 'db_only') {
+    if (params.effectiveMode === 'db_only') {
       const result = runDbOnlyAgent(providerConfig.command);
       await this.completeJobFromResult(
         result,
-        jobId,
-        agentName,
-        topicId,
-        userEmail,
-        requesterUserId,
-        chainRootBatchId,
-        chainDepth,
-        requesterRole,
+        params.jobId,
+        params.agentName,
+        params.topicId,
+        params.userEmail,
+        params.requesterUserId,
+        params.chainRootBatchId,
+        params.chainDepth,
+        params.requesterRole,
         policy.canWriteArtifacts ? jobOutputDir : undefined
       );
       return;
     }
 
+    const topicLineage = getTopicLineage(this.db, params.topicId);
     const topicArtifacts = policy.canWriteArtifacts
-      ? listTopicArtifactContext(this.db, topicId)
+      ? listScopedArtifactContext(this.db, topicLineage)
       : undefined;
 
-    const needsSandbox = effectiveMode === 'sandbox';
+    const needsSandbox = params.effectiveMode === 'sandbox';
     const sandboxOptions = needsSandbox ? {
       projectRoot: this.basePath,
       readOnlyProject: policy.sandboxReadOnly,
@@ -386,30 +548,34 @@ export class Orchestrator {
 
     await this.completeProviderJob({
       command,
-      topicId,
-      agentName,
-      triggerMessageId,
-      language,
-      userEmail,
-      requesterUserId,
-      chainRootBatchId,
-      chainDepth,
-      requesterRole,
+      topicId: params.topicId,
+      topicLineage,
+      agentName: params.agentName,
+      triggerMessageId: params.triggerMessageId,
+      language: params.language,
+      userEmail: params.userEmail,
+      requesterUserId: params.requesterUserId,
+      chainRootBatchId: params.chainRootBatchId,
+      chainDepth: params.chainDepth,
+      requesterRole: params.requesterRole,
       topicArtifacts,
-      executionMode: effectiveMode,
+      executionMode: params.effectiveMode,
       sandboxRunner: needsSandbox ? this.sandboxRunner : undefined,
       sandboxOptions,
       outputDir: policy.canWriteArtifacts ? jobOutputDir : undefined,
-      jobId,
+      jobId: params.jobId,
     });
+    } catch (error: unknown) {
+      this.failJob(params.topicId, params.jobId, params.agentName, `Unexpected orchestrator error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      try { fs.rmSync(path.join(os.tmpdir(), 'teepee', 'jobs', String(jobId)), { recursive: true, force: true }); } catch {}
+      try { fs.rmSync(path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId)), { recursive: true, force: true }); } catch {}
     }
   }
 
   private async completeProviderJob(params: {
     command: string;
     topicId: number;
+    topicLineage: number[];
     agentName: string;
     triggerMessageId: number;
     language: string;
@@ -418,7 +584,7 @@ export class Orchestrator {
     chainRootBatchId: number;
     chainDepth: number;
     requesterRole: UserRole;
-    topicArtifacts?: ReturnType<typeof listTopicArtifactContext>;
+    topicArtifacts?: ReturnType<typeof listScopedArtifactContext>;
     executionMode: ExecutionMode;
     sandboxRunner?: SandboxRunner;
     sandboxOptions?: SandboxOptions;
@@ -432,6 +598,7 @@ export class Orchestrator {
       const { result, artifactReadAccess, pendingUserInput } = await this.runAgentWithArtifactOps({
         command: params.command,
         topicId: params.topicId,
+        topicLineage: params.topicLineage,
         agentName: params.agentName,
         triggerMessageId: params.triggerMessageId,
         language: params.language,
@@ -604,10 +771,11 @@ export class Orchestrator {
   private async runAgentWithArtifactOps(params: {
     command: string;
     topicId: number;
+    topicLineage: number[];
     agentName: string;
     triggerMessageId: number;
     language: string;
-    topicArtifacts?: ReturnType<typeof listTopicArtifactContext>;
+    topicArtifacts?: ReturnType<typeof listScopedArtifactContext>;
     executionMode: ExecutionMode;
     sandboxRunner?: SandboxRunner;
     sandboxOptions?: SandboxOptions;
@@ -736,7 +904,7 @@ export class Orchestrator {
 
       const executed = executeArtifactOps(
         this.db,
-        params.topicId,
+        params.topicLineage,
         validated.ops,
         artifactReadAccess
       );
@@ -943,6 +1111,8 @@ export class Orchestrator {
          j.agent_name,
          j.requested_by_email,
          j.requested_by_user_id,
+         j.effective_mode,
+         j.effective_profile,
          b.id as batch_id,
          b.trigger_message_id,
          COALESCE(b.chain_root_batch_id, b.id) as chain_root_batch_id,
@@ -958,9 +1128,7 @@ export class Orchestrator {
 
     if (!runInfo) throw new Error(`Job ${request.jobId} resume context not found`);
 
-    const key = `${runInfo.agent_name}:${runInfo.topic_id}`;
-    const prev = this.activeJobs.get(key);
-    if (prev) await prev;
+    this.callbacks.onRuntimeChanged?.(runInfo.topic_id);
 
     const jobPromise = this.runResumedJob({
       jobId: runInfo.job_id,
@@ -973,19 +1141,19 @@ export class Orchestrator {
       chainRootBatchId: runInfo.chain_root_batch_id,
       chainDepth: runInfo.chain_depth,
       requesterRole: this.resolveUserRole(runInfo.requested_by_email ?? getUserByIdOrThrow(this.db, runInfo.requested_by_user_id).email),
+      effectiveMode: (runInfo.effective_mode ?? 'disabled') as ExecutionMode,
+      effectiveProfile: runInfo.effective_profile as AgentAccessProfile | null,
       userInputResultsText: formatUserInputResults(answeredRequest),
       requestId,
       answeredByUserId: answeredRequest.answeredByUserId,
+    }).finally(() => {
+      this.runningJobs.delete(runInfo.job_id);
+      this.callbacks.onRuntimeChanged?.(runInfo.topic_id);
+      void this.drainScheduler();
     });
-    this.activeJobs.set(key, jobPromise);
 
-    try {
-      await jobPromise;
-    } finally {
-      if (this.activeJobs.get(key) === jobPromise) {
-        this.activeJobs.delete(key);
-      }
-    }
+    this.runningJobs.set(runInfo.job_id, jobPromise);
+    await jobPromise;
 
     return {
       topicId: runInfo.topic_id,
@@ -1004,8 +1172,9 @@ export class Orchestrator {
     const request = getJobInputRequestById(this.db, requestId);
     if (!request) throw new Error('Input request not found');
     if (request.status !== 'pending') throw new Error(`Input request is not pending (${request.status})`);
-    if (request.requestedByUserId !== actorUserId && actorRole !== 'owner') {
-      throw new Error('Only the requester or an owner can cancel this request');
+    const canCancelAny = hasCapability(this.config, actorRole, 'input_requests.cancel.any');
+    if (request.requestedByUserId !== actorUserId && !canCancelAny) {
+      throw new Error('Only the requester or an authorized admin can cancel this request');
     }
 
     this.db.transaction(() => {
@@ -1014,6 +1183,9 @@ export class Orchestrator {
       cancelJob(this.db, request.jobId, 'User input request cancelled');
       insertMessage(this.db, request.topicId, 'system', 'teepee', `Richiesta annullata: ${request.title}`);
     })();
+
+    this.callbacks.onRuntimeChanged?.(request.topicId);
+    await this.drainScheduler();
 
     return { topicId: request.topicId, jobId: request.jobId };
   }
@@ -1029,29 +1201,28 @@ export class Orchestrator {
     chainRootBatchId: number;
     chainDepth: number;
     requesterRole: UserRole;
+    effectiveMode: ExecutionMode;
+    effectiveProfile: AgentAccessProfile | null;
     userInputResultsText: string;
     requestId: number;
     answeredByUserId: string;
   }): Promise<void> {
     const agentConfig = this.config.agents[params.agentName];
     const providerConfig = this.config.providers[agentConfig.provider];
-    const agentProfile = resolveRoleAgentProfile(this.config, params.requesterRole, params.agentName);
-    const policy = resolveExecutionPolicy(agentProfile);
-    const effectiveMode: ExecutionMode = policy.mode;
-    const effectiveProfile: AgentAccessProfile | null = agentProfile;
+    const policy = resolveExecutionPolicy(params.effectiveProfile);
 
-    if (effectiveMode === 'disabled') {
+    if (params.effectiveMode === 'disabled') {
       const error = `Agent '${params.agentName}' is disabled: ${policy.reason}`;
-      updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
+      updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
       emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error }));
       this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
       return;
     }
 
-    if (effectiveMode === 'sandbox') {
-      const sandboxError = validateSandboxAvailability(effectiveMode, this.sandboxAvailable);
+    if (params.effectiveMode === 'sandbox') {
+      const sandboxError = validateSandboxAvailability(params.effectiveMode, this.sandboxAvailable);
       if (sandboxError) {
-        updateJobStatus(this.db, params.jobId, 'failed', { error: sandboxError, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: effectiveMode, effective_profile: effectiveProfile });
+        updateJobStatus(this.db, params.jobId, 'failed', { error: sandboxError, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
         emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error: sandboxError }));
         this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, sandboxError);
         return;
@@ -1070,10 +1241,11 @@ export class Orchestrator {
       }));
       this.callbacks.onJobResumed(params.topicId, params.jobId, params.agentName, params.requestId, params.answeredByUserId);
 
+      const topicLineage = getTopicLineage(this.db, params.topicId);
       const topicArtifacts = policy.canWriteArtifacts
-        ? listTopicArtifactContext(this.db, params.topicId)
+        ? listScopedArtifactContext(this.db, topicLineage)
         : undefined;
-      const needsSandbox = effectiveMode === 'sandbox';
+      const needsSandbox = params.effectiveMode === 'sandbox';
       const sandboxOptions = needsSandbox ? {
         projectRoot: this.basePath,
         readOnlyProject: policy.sandboxReadOnly,
@@ -1090,6 +1262,7 @@ export class Orchestrator {
       await this.completeProviderJob({
         command: providerConfig.command,
         topicId: params.topicId,
+        topicLineage,
         agentName: params.agentName,
         triggerMessageId: params.triggerMessageId,
         language: params.language,
@@ -1099,13 +1272,15 @@ export class Orchestrator {
         chainDepth: params.chainDepth,
         requesterRole: params.requesterRole,
         topicArtifacts,
-        executionMode: effectiveMode,
+        executionMode: params.effectiveMode,
         sandboxRunner: needsSandbox ? this.sandboxRunner : undefined,
         sandboxOptions,
         outputDir: policy.canWriteArtifacts ? jobOutputDir : undefined,
         jobId: params.jobId,
         userInputResultsText: params.userInputResultsText,
       });
+    } catch (error: unknown) {
+      this.failJob(params.topicId, params.jobId, params.agentName, `Unexpected resumed-job error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       try { fs.rmSync(path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId)), { recursive: true, force: true }); } catch {}
     }
@@ -1166,14 +1341,15 @@ export class Orchestrator {
     }
 
     if (allowed.length > 0) {
-      await this.executeBatch(
+      await this.enqueueBatch(
         topicId,
         outputMessageId,
         allowed,
         userEmail,
         chainRootBatchId,
         chainDepth + 1,
-        requesterRole
+        requesterRole,
+        candidateAgents.length > 1
       );
     }
   }
@@ -1324,4 +1500,8 @@ function clearJobControlFiles(outputDir: string): void {
       // Ignore cleanup failures; later read/ingest steps will surface real issues.
     }
   }
+}
+
+function isWriteProfile(profile: AgentAccessProfile | null | undefined): boolean {
+  return profile === 'readwrite' || profile === 'trusted';
 }

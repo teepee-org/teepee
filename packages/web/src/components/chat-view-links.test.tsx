@@ -108,4 +108,28 @@ describe('ChatView link routing', () => {
       expect(screen.getByTestId('artifact-viewer').textContent).toBe('artifact:4:2')
     );
   });
+
+  it('opens filesystem references in the reference viewer', async () => {
+    render(
+      <ChatView
+        {...baseProps}
+        messages={[
+          {
+            id: 3,
+            topic_id: 1,
+            author_type: 'user',
+            author_name: 'owner',
+            body: '[hosts](teepee:/fs/host/etc/hosts)',
+            created_at: '2026-04-11T10:00:00.000Z',
+          },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByText('hosts'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('reference-viewer').textContent).toBe('teepee:/fs/host/etc/hosts')
+    );
+  });
 });

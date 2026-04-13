@@ -34,6 +34,9 @@ function makeConfig(roles: TeepeeConfig['roles']): TeepeeConfig {
       architect: { provider: 'echo' },
     },
     roles,
+    filesystem: {
+      roots: [{ id: 'workspace', kind: 'workspace', path: '.', resolvedPath: process.cwd() }],
+    },
     limits: LIMITS,
     security: { sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] } },
   };

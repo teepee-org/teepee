@@ -3,12 +3,10 @@ import type { Topic } from '../types';
 interface Props {
   archivedTopics: Topic[];
   onRestore: (topicId: number) => void;
-  userRole: string;
+  canRestoreTopics: boolean;
 }
 
-export function ArchiveList({ archivedTopics, onRestore, userRole }: Props) {
-  const canEdit = userRole !== 'observer';
-
+export function ArchiveList({ archivedTopics, onRestore, canRestoreTopics }: Props) {
   if (archivedTopics.length === 0) {
     return (
       <div className="archive-list">
@@ -42,7 +40,7 @@ export function ArchiveList({ archivedTopics, onRestore, userRole }: Props) {
                   </span>
                 )}
               </div>
-              {canEdit && (
+              {canRestoreTopics && (
                 <button
                   className="archive-restore-btn"
                   onClick={() => onRestore(topic.id)}

@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     handle TEXT UNIQUE,
-    role TEXT NOT NULL DEFAULT 'collaborator' CHECK (role IN ('owner', 'collaborator', 'observer')),
+    role TEXT NOT NULL DEFAULT 'collaborator',
     status TEXT NOT NULL DEFAULT 'invited',
     pre_revocation_status TEXT,
     revoked_at TEXT,
@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS messages (
     topic_id INTEGER NOT NULL REFERENCES topics(id),
     author_type TEXT NOT NULL,
     author_name TEXT NOT NULL,
+    client_message_id TEXT,
     body TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

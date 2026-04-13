@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { AgentSlot } from './AgentSlot';
 import { ComposeBox } from './ComposeBox';
@@ -28,12 +28,13 @@ interface Props {
   activeJobs: ActiveJob[];
   inputRequests: PendingInputRequest[];
   currentUserId: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean;
   onAnswerInput: (requestId: number, payload: { value: boolean | string | string[]; comment?: string }) => Promise<void>;
   onCancelInput: (requestId: number) => Promise<void>;
   onMenuToggle?: () => void;
   highlightedMessageId?: number | null;
-  isOwner?: boolean;
+  canCancelAnyInputRequest?: boolean;
+  canPromoteArtifacts?: boolean;
   projectPath?: string;
 }
 
@@ -51,12 +52,14 @@ export function ChatView({
   onCancelInput,
   onMenuToggle,
   highlightedMessageId,
-  isOwner = false,
+  canCancelAnyInputRequest = false,
+  canPromoteArtifacts = false,
   projectPath,
 }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
+  const stickToBottom = useRef(true);
   const [openArtifact, setOpenArtifact] = useState<{ artifactId: number; versionId: number; versionNumber?: number } | null>(null);
   const [openRef, setOpenRef] = useState<string | null>(null);
   const visibleInputRequests = inputRequests.filter((request) => request.status === 'pending');
@@ -73,20 +76,52 @@ export function ChatView({
     setOpenRef(href);
   }, []);
 
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    messagesEndRef.current?.scrollIntoView({ block: 'end' });
+  }, []);
+
   // Track if user is at bottom
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    isAtBottom.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    isAtBottom.current = nearBottom;
+    stickToBottom.current = nearBottom;
   };
 
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
-    if (isAtBottom.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const handleSend = useCallback((text: string) => {
+    const wasAtBottom = isAtBottom.current;
+    const wasSticky = stickToBottom.current;
+    isAtBottom.current = true;
+    stickToBottom.current = true;
+    const accepted = onSend(text);
+    if (!accepted) {
+      isAtBottom.current = wasAtBottom;
+      stickToBottom.current = wasSticky;
     }
-  }, [messages, activeJobs]);
+    return accepted;
+  }, [onSend]);
+
+  useLayoutEffect(() => {
+    if (highlightedMessageId) {
+      isAtBottom.current = false;
+      stickToBottom.current = false;
+      return;
+    }
+    isAtBottom.current = true;
+    stickToBottom.current = true;
+    scrollToBottom();
+  }, [topicId, highlightedMessageId, scrollToBottom]);
+
+  // Keep following the bottom after local sends until the user scrolls away.
+  useLayoutEffect(() => {
+    if (stickToBottom.current) {
+      scrollToBottom();
+    }
+  }, [messages, activeJobs, visibleInputRequests.length, scrollToBottom]);
 
   useEffect(() => {
     if (!highlightedMessageId) return;
@@ -114,7 +149,7 @@ export function ChatView({
           artifactId={openArtifact.artifactId}
           versionId={openArtifact.versionId}
           versionNumber={openArtifact.versionNumber}
-          isOwner={isOwner}
+          canPromote={canPromoteArtifacts}
           onClose={() => setOpenArtifact(null)}
           projectPath={projectPath}
           onOpenReference={handleOpenReference}
@@ -162,7 +197,7 @@ export function ChatView({
             key={request.requestId}
             request={request}
             currentUserId={currentUserId}
-            canCancel={isOwner || currentUserId === request.requestedByUserId}
+            canCancel={canCancelAnyInputRequest || currentUserId === request.requestedByUserId}
             onAnswer={onAnswerInput}
             onCancel={onCancelInput}
           />
@@ -180,7 +215,7 @@ export function ChatView({
         ))}
         <div ref={messagesEndRef} />
       </div>
-      <ComposeBox topicId={topicId} agents={agents} commands={commands} onSend={onSend} />
+      <ComposeBox topicId={topicId} agents={agents} commands={commands} onSend={handleSend} />
     </div>
   );
 }

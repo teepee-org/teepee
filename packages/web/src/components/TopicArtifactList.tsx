@@ -8,30 +8,68 @@ interface Props {
 }
 
 export function TopicArtifactList({ topicId, refreshKey = 0, onOpenArtifact }: Props) {
-  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const [localArtifacts, setLocalArtifacts] = useState<ArtifactSummary[]>([]);
+  const [inheritedArtifacts, setInheritedArtifacts] = useState<ArtifactSummary[]>([]);
+  const [showInherited, setShowInherited] = useState(false);
 
   useEffect(() => {
-    fetchTopicArtifacts(topicId).then(setArtifacts).catch(() => setArtifacts([]));
+    setShowInherited(false);
+  }, [topicId]);
+
+  useEffect(() => {
+    fetchTopicArtifacts(topicId, 'inherited')
+      .then((all) => {
+        setLocalArtifacts(all.filter((artifact) => artifact.topic_id === topicId));
+        setInheritedArtifacts(all.filter((artifact) => artifact.topic_id !== topicId));
+      })
+      .catch(() => {
+        setLocalArtifacts([]);
+        setInheritedArtifacts([]);
+      });
   }, [topicId, refreshKey]);
 
-  if (artifacts.length === 0) return null;
+  if (localArtifacts.length === 0 && inheritedArtifacts.length === 0) return null;
 
   return (
     <div className="topic-artifacts-panel">
-      <h3>Documents</h3>
       <ul className="topic-artifacts-list">
-        {artifacts.map((a) => (
+        {localArtifacts.map((artifact) => (
           <li
-            key={a.id}
+            key={artifact.id}
             className="topic-artifact-item"
-            onClick={() => a.current_version_id && onOpenArtifact(a.id, a.current_version_id)}
+            onClick={() => artifact.current_version_id && onOpenArtifact(artifact.id, artifact.current_version_id)}
           >
-            <span className="topic-artifact-title">{a.title}</span>
+            <span className="topic-artifact-title">{artifact.title}</span>
             <span className="topic-artifact-meta">
-              {a.kind}{a.canonical_source === 'repo' ? ' · promoted' : ''}
+              {artifact.kind}{artifact.canonical_source === 'repo' ? ' · promoted' : ''}
             </span>
           </li>
         ))}
+
+        {showInherited && inheritedArtifacts.map((artifact) => (
+          <li
+            key={artifact.id}
+            className="topic-artifact-item inherited"
+            onClick={() => artifact.current_version_id && onOpenArtifact(artifact.id, artifact.current_version_id)}
+          >
+            <span className="topic-artifact-title">{artifact.title}</span>
+            <span className="topic-artifact-meta">
+              {artifact.kind}{artifact.canonical_source === 'repo' ? ' · promoted' : ''}
+            </span>
+          </li>
+        ))}
+
+        {inheritedArtifacts.length > 0 && (
+          <li className="topic-artifact-toggle-slot">
+            <button
+              type="button"
+              className="topic-artifact-toggle"
+              onClick={() => setShowInherited((value) => !value)}
+            >
+              {showInherited ? 'Hide parents' : `+${inheritedArtifacts.length} parents`}
+            </button>
+          </li>
+        )}
       </ul>
     </div>
   );

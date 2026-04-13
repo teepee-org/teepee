@@ -7,6 +7,8 @@ import * as https from 'https';
 import { spawnSync } from 'child_process';
 import {
   loadConfig,
+  listAssignableRoleIds,
+  migrateConfigFileToV2,
   openDb,
   createUser,
   listUsers,
@@ -64,9 +66,10 @@ Usage:
   teepee stop                     Stop server
   teepee status                   Show status
 
-  teepee invite <email> [--role collaborator|observer]
+  teepee invite <email> [--role <role>]
   teepee revoke <email>
   teepee users
+  teepee config migrate-v2 [--config <path>] [--stdout|--write|--check]
 
   teepee agents                   List configured agents
   teepee version                  Show CLI version
@@ -152,21 +155,60 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('  #   provider: codex');
   }
 
-  const roleLines = ['roles:', '  owner:', '  collaborator:', '  observer: {}'];
-  for (const agentName of configuredAgents) {
-    roleLines.splice(roleLines.indexOf('  collaborator:'), 0, `    ${agentName}: ${agentName === 'devops' ? 'trusted' : 'readwrite'}`);
+  const collaboratorCapabilities = [
+    'files.workspace.access',
+    'topics.create',
+    'topics.rename',
+    'topics.archive',
+    'topics.restore',
+    'topics.move',
+    'topics.language.set',
+    'messages.post',
+  ];
+  const roleLines = [
+    'roles:',
+    '  owner:',
+    '    superuser: true',
+  ];
+  if (configuredAgents.length === 0) {
+    roleLines.push('    agents: {}');
+  } else {
+    roleLines.push('    agents:');
+    for (const agentName of configuredAgents) {
+      roleLines.push(`      ${agentName}: ${agentName === 'devops' ? 'trusted' : 'readwrite'}`);
+    }
   }
-  for (const agentName of configuredAgents) {
-    roleLines.splice(roleLines.indexOf('  observer: {}'), 0, `    ${agentName}: readwrite`);
+  roleLines.push('  collaborator:');
+  roleLines.push('    capabilities:');
+  for (const capability of collaboratorCapabilities) {
+    roleLines.push(`      - ${capability}`);
   }
+  if (configuredAgents.length === 0) {
+    roleLines.push('    agents: {}');
+  } else {
+    roleLines.push('    agents:');
+    for (const agentName of configuredAgents) {
+      roleLines.push(`      ${agentName}: readwrite`);
+    }
+  }
+  roleLines.push('  observer:');
+  roleLines.push('    capabilities:');
+  roleLines.push('      - files.workspace.access');
+  roleLines.push('    agents: {}');
 
   const template = [
-    'version: 1',
+    'version: 2',
     'mode: private',
     '',
     'teepee:',
     `  name: ${projectName}`,
     '  language: en',
+    '',
+    'filesystem:',
+    '  roots:',
+    '    - id: workspace',
+    '      kind: workspace',
+    '      path: .',
     '',
     ...providerLines,
     '',
@@ -176,6 +218,61 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
   ].join('\n');
 
   return { template, detectedProviders };
+}
+
+function printConfigMigrateUsage() {
+  console.log('Usage: teepee config migrate-v2 [--config <path>] [--stdout|--write|--check]');
+}
+
+function handleConfigCommand(commandArgs: string[]) {
+  const subcommand = commandArgs[1];
+  if (subcommand !== 'migrate-v2') {
+    printConfigMigrateUsage();
+    process.exit(1);
+  }
+
+  const configIdx = commandArgs.indexOf('--config');
+  const targetConfigPath = configIdx !== -1 ? commandArgs[configIdx + 1] : configPath;
+  if (!targetConfigPath) {
+    console.error('Missing value for --config');
+    process.exit(1);
+  }
+
+  const write = commandArgs.includes('--write');
+  const check = commandArgs.includes('--check');
+  const stdout = commandArgs.includes('--stdout') || (!write && !check);
+  const modeCount = Number(write) + Number(check) + Number(commandArgs.includes('--stdout'));
+  if (modeCount > 1) {
+    console.error('Use only one of --stdout, --write, or --check');
+    process.exit(1);
+  }
+
+  try {
+    const result = migrateConfigFileToV2(path.resolve(targetConfigPath), { write });
+    if (check) {
+      process.exit(result.migrated ? 2 : 0);
+    }
+    if (stdout) {
+      process.stdout.write(result.output);
+      if (!result.output.endsWith('\n')) process.stdout.write('\n');
+      return;
+    }
+    if (result.migrated) {
+      console.log(
+        result.sourceVersion === 1
+          ? `Config migrated to v2: ${path.resolve(targetConfigPath)}`
+          : `Config normalized to latest v2 schema: ${path.resolve(targetConfigPath)}`
+      );
+      if (result.backupPath) {
+        console.log(`Backup: ${result.backupPath}`);
+      }
+    } else {
+      console.log(`Config already uses version 2: ${path.resolve(targetConfigPath)}`);
+    }
+  } catch (error: any) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
 }
 
 function compareVersions(a: string, b: string): number {
@@ -313,6 +410,11 @@ async function showUpdateStatus(forceRefresh = false) {
 }
 
 switch (command) {
+  case 'config': {
+    handleConfigCommand(args);
+    break;
+  }
+
   case 'start':
   case 'serve': {
     let port: number;
@@ -415,19 +517,20 @@ switch (command) {
   case 'invite': {
     const email = args[1];
     if (!email) {
-      console.error('Usage: teepee invite <email> [--role collaborator|observer]');
+      console.error('Usage: teepee invite <email> [--role <role>]');
       process.exit(1);
     }
     const roleIdx = args.indexOf('--role');
     const rawRole = roleIdx !== -1 ? args[roleIdx + 1] : 'collaborator';
     const role = rawRole === 'user' ? 'collaborator' : rawRole;
-    if (!['collaborator', 'observer'].includes(role)) {
-      console.error(`Invalid invite role: ${rawRole}. Use collaborator or observer`);
-      process.exit(1);
-    }
 
     ensureDir();
     const config = loadConfig(configPath);
+    const assignableRoles = listAssignableRoleIds(config);
+    if (!assignableRoles.includes(role)) {
+      console.error(`Invalid invite role: ${rawRole}. Use one of: ${assignableRoles.join(', ')}`);
+      process.exit(1);
+    }
     if (config.mode !== 'shared') {
       console.error('Invites are only available when .teepee/config.yaml has mode: shared');
       process.exit(1);

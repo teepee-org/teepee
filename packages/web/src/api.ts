@@ -85,14 +85,36 @@ export async function searchTeepee(params: {
 export async function postMessage(
   topicId: number,
   text: string,
-  authorName?: string
-): Promise<{ id: number }> {
+  authorName?: string,
+  clientMessageId?: string
+): Promise<{ id: number; message?: Message }> {
   const res = await fetch(`${BASE}/topics/${topicId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, authorName }),
+    body: JSON.stringify({ text, authorName, clientMessageId }),
   });
-  return res.json();
+  const data = await res.json().catch(() => ({ error: 'Failed to post message' }));
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+export interface TopicJobSnapshot {
+  id: number;
+  agent_name: string;
+  status: 'queued' | 'running';
+  output_message_id: number | null;
+  error: string | null;
+}
+
+export async function fetchActiveTopicJobs(topicId: number): Promise<TopicJobSnapshot[]> {
+  const res = await fetch(`${BASE}/topics/${topicId}/jobs?status=active`);
+  const data = await res.json().catch(() => ({ error: 'Failed to load active jobs' }));
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 // ── Human input checkpoints ──
@@ -202,8 +224,8 @@ export interface MessageArtifactInfo {
   version: number;
 }
 
-export async function fetchTopicArtifacts(topicId: number): Promise<ArtifactSummary[]> {
-  const res = await fetch(`${BASE}/topics/${topicId}/artifacts`);
+export async function fetchTopicArtifacts(topicId: number, scope: 'local' | 'inherited' = 'local'): Promise<ArtifactSummary[]> {
+  const res = await fetch(`${BASE}/topics/${topicId}/artifacts?scope=${scope}`);
   return res.json();
 }
 
@@ -242,6 +264,18 @@ export function artifactDownloadUrl(artifactId: number, versionId: number): stri
 
 // ── Archive ──
 
+export async function apiRenameTopic(topicId: number, name: string): Promise<void> {
+  const res = await fetch(`${BASE}/topics/${topicId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to rename topic' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+}
+
 export async function apiArchiveTopic(topicId: number): Promise<void> {
   await fetch(`${BASE}/topics/${topicId}/archive`, { method: 'POST' });
 }
@@ -258,11 +292,12 @@ export async function apiRestoreTopic(topicId: number): Promise<void> {
 // ── References ──
 
 export interface ReferenceSuggestItem {
-  type: 'workspace_file' | 'artifact_document';
+  type: 'workspace_file' | 'filesystem_file' | 'workspace_dir' | 'filesystem_dir' | 'artifact_document';
   label: string;
   insertText: string;
   canonicalUri: string;
   description: string;
+  continueAutocomplete?: boolean;
 }
 
 export type WorkspaceFileResponse =
@@ -270,7 +305,7 @@ export type WorkspaceFileResponse =
   | { binary: true; mime: string; size: number };
 
 export interface ResolvedReference {
-  targetType: 'workspace-file' | 'artifact-document' | 'artifact-tree-file';
+  targetType: 'workspace-file' | 'filesystem-file' | 'artifact-document' | 'artifact-tree-file';
   canonicalUri: string;
   displayName: string;
   mime: string;
@@ -278,15 +313,17 @@ export interface ResolvedReference {
   selection: { line: number | null; column: number | null };
   fetch:
     | { kind: 'workspace'; path: string }
+    | { kind: 'filesystem'; rootId: string; path: string }
     | { kind: 'artifact-document'; artifactId: number; version?: number };
 }
 
 export async function suggestReferences(
   q: string,
   topicId?: number,
-  limit = 20
+  limit = 20,
+  scope: 'inherited' | 'global' = 'inherited'
 ): Promise<{ items: ReferenceSuggestItem[] }> {
-  const params = new URLSearchParams({ q, limit: String(limit) });
+  const params = new URLSearchParams({ q, limit: String(limit), scope });
   if (topicId) params.set('topicId', String(topicId));
   const res = await fetch(`${BASE}/references/suggest?${params}`);
   return res.json();
@@ -305,8 +342,8 @@ export async function resolveReference(href: string): Promise<ResolvedReference>
   return res.json();
 }
 
-export async function fetchWorkspaceFile(filePath: string): Promise<WorkspaceFileResponse> {
-  const res = await fetch(`${BASE}/workspace/file?path=${encodeURIComponent(filePath)}`);
+export async function fetchFileAtRoot(rootId: string, filePath: string): Promise<WorkspaceFileResponse> {
+  const res = await fetch(`${BASE}/fs/file?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(filePath)}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'File not found' }));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -314,9 +351,21 @@ export async function fetchWorkspaceFile(filePath: string): Promise<WorkspaceFil
   return res.json();
 }
 
+export async function fetchWorkspaceFile(filePath: string): Promise<WorkspaceFileResponse> {
+  return fetchFileAtRoot('workspace', filePath);
+}
+
+export function fileDownloadUrl(
+  rootId: string,
+  filePath: string,
+  disposition: 'attachment' | 'inline' = 'attachment'
+): string {
+  return `${BASE}/fs/download?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(filePath)}&disposition=${disposition}`;
+}
+
 export function workspaceDownloadUrl(
   filePath: string,
   disposition: 'attachment' | 'inline' = 'attachment'
 ): string {
-  return `${BASE}/workspace/download?path=${encodeURIComponent(filePath)}&disposition=${disposition}`;
+  return fileDownloadUrl('workspace', filePath, disposition);
 }

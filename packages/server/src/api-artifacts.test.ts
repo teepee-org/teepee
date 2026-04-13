@@ -152,6 +152,34 @@ describe('artifact API routes', () => {
     expect(download.body).toBe('# Queue UI rollout');
   });
 
+  it('lists inherited artifacts for child topics without starving parent results', async () => {
+    const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
+    db.exec(`
+      INSERT INTO topics (id, name) VALUES (2, 'Parent docs');
+      INSERT INTO topics (id, name, parent_topic_id) VALUES (3, 'Child docs', 2);
+    `);
+    createDocumentArtifact(db, {
+      topicId: 2,
+      kind: 'spec',
+      title: 'Parent contract',
+      body: '# Parent contract',
+    });
+    createDocumentArtifact(db, {
+      topicId: 3,
+      kind: 'plan',
+      title: 'Child rollout',
+      body: '# Child rollout',
+    });
+    db.close();
+
+    const inherited = await request(port, 'GET', '/api/topics/3/artifacts?scope=inherited', observerCookie);
+    expect(inherited.status).toBe(200);
+    expect(inherited.body.map((artifact: any) => artifact.title)).toEqual([
+      'Child rollout',
+      'Parent contract',
+    ]);
+  });
+
   it('keeps promote owner-only and records repo metadata on success', async () => {
     const denied = await request(
       port,

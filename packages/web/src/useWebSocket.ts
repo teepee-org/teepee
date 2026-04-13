@@ -7,16 +7,32 @@ export function useWebSocket(onEvent: EventHandler) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mountedRef = useRef(true);
+  const queuedEventsRef = useRef<string[]>([]);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
   useEffect(() => {
+    mountedRef.current = true;
+
+    function flushQueue() {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || queuedEventsRef.current.length === 0) {
+        return;
+      }
+      for (const payload of queuedEventsRef.current) {
+        ws.send(payload);
+      }
+      queuedEventsRef.current = [];
+    }
+
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${window.location.host}`);
 
       ws.onopen = () => {
         setConnected(true);
+        flushQueue();
       };
 
       ws.onmessage = (evt) => {
@@ -30,7 +46,9 @@ export function useWebSocket(onEvent: EventHandler) {
 
       ws.onclose = () => {
         setConnected(false);
-        reconnectTimer.current = setTimeout(connect, 2000);
+        if (mountedRef.current) {
+          reconnectTimer.current = setTimeout(connect, 2000);
+        }
       };
 
       ws.onerror = () => {
@@ -42,15 +60,23 @@ export function useWebSocket(onEvent: EventHandler) {
 
     connect();
     return () => {
+      mountedRef.current = false;
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
   }, []);
 
   const send = useCallback((event: object) => {
+    const payload = JSON.stringify(event);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(event));
+      wsRef.current.send(payload);
+      return true;
     }
+    if (queuedEventsRef.current.length >= 200) {
+      queuedEventsRef.current.shift();
+    }
+    queuedEventsRef.current.push(payload);
+    return false;
   }, []);
 
   return { send, connected };

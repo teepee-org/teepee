@@ -1,4 +1,5 @@
-import type { CommandDef, CommandContext, UserRole } from './types.js';
+import type { CommandDef, CommandContext } from './types.js';
+import { hasCapability } from '../config.js';
 import {
   topicLanguageCommand,
   topicRenameCommand,
@@ -34,12 +35,6 @@ export function listCommands(): CommandDef[] {
   return [...commands.values()];
 }
 
-const ROLE_LEVEL: Record<UserRole, number> = { observer: 0, collaborator: 1, owner: 2 };
-
-function hasMinRole(userRole: string, minRole: UserRole): boolean {
-  return (ROLE_LEVEL[userRole as UserRole] ?? 0) >= ROLE_LEVEL[minRole];
-}
-
 export interface ExecuteResult {
   ok: boolean;
   error?: string;
@@ -59,8 +54,8 @@ export function executeCommand(
     return { ok: false, error: `Unknown command: ${commandName}` };
   }
 
-  if (!hasMinRole(ctx.user.role, cmd.minRole)) {
-    return { ok: false, error: cmd.minRole === 'owner' ? 'Owner only' : 'Insufficient permissions' };
+  if (!hasCapability(ctx.config, ctx.user.role, cmd.requiredCapability)) {
+    return { ok: false, error: 'Insufficient permissions' };
   }
 
   return cmd.execute(ctx, params);

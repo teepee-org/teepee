@@ -3,16 +3,21 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { ReferenceViewer } from './ReferenceViewer';
 import {
   resolveReference,
+  fetchFileAtRoot,
   fetchWorkspaceFile,
+  fileDownloadUrl,
   workspaceDownloadUrl,
 } from '../api';
 
 vi.mock('../api', () => ({
   resolveReference: vi.fn(),
+  fetchFileAtRoot: vi.fn(),
   fetchWorkspaceFile: vi.fn(),
   fetchArtifact: vi.fn(),
   fetchArtifactVersion: vi.fn(),
   fetchArtifactVersions: vi.fn(),
+  fileDownloadUrl: vi.fn((rootId: string, filePath: string, disposition: 'attachment' | 'inline' = 'attachment') =>
+    `/api/fs/download?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(filePath)}&disposition=${disposition}`),
   workspaceDownloadUrl: vi.fn((filePath: string, disposition: 'attachment' | 'inline' = 'attachment') =>
     `/api/workspace/download?path=${encodeURIComponent(filePath)}&disposition=${disposition}`),
   artifactDownloadUrl: vi.fn(),
@@ -20,7 +25,9 @@ vi.mock('../api', () => ({
 
 beforeEach(() => {
   vi.mocked(resolveReference).mockReset();
+  vi.mocked(fetchFileAtRoot).mockReset();
   vi.mocked(fetchWorkspaceFile).mockReset();
+  vi.mocked(fileDownloadUrl).mockClear();
   vi.mocked(workspaceDownloadUrl).mockClear();
 });
 

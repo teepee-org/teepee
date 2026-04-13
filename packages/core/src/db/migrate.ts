@@ -35,14 +35,39 @@ export function runMigrations(db: DatabaseType): void {
     ? db.prepare("PRAGMA table_info(users)").all() as { name: string }[]
     : [];
   const userColNames = new Set(userCols.map((c) => c.name));
+  const usersTableSql = tableExists('users')
+    ? ((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get() as { sql: string | null } | undefined)?.sql ?? '')
+    : '';
+  const usersNeedRoleConstraintRemoval = /CHECK\s*\(\s*role\s+IN\s*\(/i.test(usersTableSql);
 
-  if (!userColNames.has('id')) {
+  if (!userColNames.has('id') || usersNeedRoleConstraintRemoval) {
+    const usersLegacyExists = tableExists('users_legacy');
+    const currentUsersCount = tableExists('users')
+      ? Number((db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number }).cnt)
+      : 0;
+    const sourceTable =
+      usersLegacyExists && userColNames.has('id') && currentUsersCount === 0
+        ? 'users_legacy'
+        : 'users';
+    const sourceUserCols = tableExists(sourceTable)
+      ? db.prepare(`PRAGMA table_info(${quoteIdentifier(sourceTable)})`).all() as { name: string }[]
+      : [];
+    const sourceUserColNames = new Set(sourceUserCols.map((c) => c.name));
+
+    if (tableExists('users_v2')) {
+      db.exec(`DROP TABLE users_v2;`);
+    }
+
+    if (sourceTable === 'users' && usersLegacyExists) {
+      db.exec(`DROP TABLE users_legacy;`);
+    }
+
     db.exec(`
       CREATE TABLE users_v2 (
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         handle TEXT UNIQUE,
-        role TEXT NOT NULL DEFAULT 'collaborator' CHECK (role IN ('owner', 'collaborator', 'observer')),
+        role TEXT NOT NULL DEFAULT 'collaborator',
         status TEXT NOT NULL DEFAULT 'invited',
         pre_revocation_status TEXT,
         revoked_at TEXT,
@@ -52,7 +77,7 @@ export function runMigrations(db: DatabaseType): void {
       );
     `);
 
-    const legacyUsers = loadLegacyUsers(db, userColNames);
+    const legacyUsers = loadLegacyUsers(db, sourceTable, sourceUserColNames);
 
     const insertUser = db.prepare(`
       INSERT INTO users_v2 (id, email, handle, role, status, pre_revocation_status, revoked_at, created_at, accepted_at, last_login_at)
@@ -74,10 +99,27 @@ export function runMigrations(db: DatabaseType): void {
       );
     }
 
-    db.exec(`
-      ALTER TABLE users RENAME TO users_legacy;
-      ALTER TABLE users_v2 RENAME TO users;
-    `);
+    const foreignKeysEnabled = Number(db.pragma('foreign_keys', { simple: true })) !== 0;
+    if (foreignKeysEnabled) {
+      db.pragma('foreign_keys = OFF');
+    }
+    try {
+      if (sourceTable === 'users') {
+        db.exec(`
+          ALTER TABLE users RENAME TO users_legacy;
+          ALTER TABLE users_v2 RENAME TO users;
+        `);
+      } else {
+        db.exec(`
+          DROP TABLE users;
+          ALTER TABLE users_v2 RENAME TO users;
+        `);
+      }
+    } finally {
+      if (foreignKeysEnabled) {
+        db.pragma('foreign_keys = ON');
+      }
+    }
   }
 
   if (!hasColumn('users', 'pre_revocation_status')) {
@@ -243,11 +285,24 @@ export function runMigrations(db: DatabaseType): void {
   `);
 
   repairTablesReferencingLegacyUsers(db);
+  cleanupLegacyUsersTable(db);
   backfillUserIds(db, tableExists, hasColumn);
 
   const messageColNames = tableExists('messages')
     ? new Set((db.prepare("PRAGMA table_info(messages)").all() as { name: string }[]).map((c) => c.name))
     : new Set<string>();
+  if (tableExists('messages') && !messageColNames.has('client_message_id')) {
+    db.exec(`ALTER TABLE messages ADD COLUMN client_message_id TEXT;`);
+  }
+
+  if (tableExists('messages')) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_topic_client_message_id
+        ON messages (topic_id, client_message_id)
+        WHERE client_message_id IS NOT NULL;
+    `);
+  }
+
   const topicSearchColNames = tableExists('topics')
     ? new Set((db.prepare("PRAGMA table_info(topics)").all() as { name: string }[]).map((c) => c.name))
     : new Set<string>();
@@ -363,6 +418,7 @@ function repairTablesReferencingLegacyUsers(db: DatabaseType): void {
 
 function loadLegacyUsers(
   db: DatabaseType,
+  tableName: string,
   userColNames: Set<string>
 ): Array<Record<string, any>> {
   if (!userColNames.has('email')) {
@@ -370,7 +426,7 @@ function loadLegacyUsers(
   }
 
   const orderBy = userColNames.has('created_at') ? 'created_at, email' : 'email';
-  const rows = db.prepare(`SELECT * FROM users ORDER BY ${orderBy}`).all() as Array<Record<string, any>>;
+  const rows = db.prepare(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY ${orderBy}`).all() as Array<Record<string, any>>;
 
   return rows.map((row) => {
     const handle = userColNames.has('handle') ? row.handle ?? null : null;
@@ -392,14 +448,8 @@ function loadLegacyUsers(
   });
 }
 
-function normalizeLegacyRole(role: unknown): 'owner' | 'collaborator' | 'observer' {
-  if (role === 'owner' || role === 'collaborator' || role === 'observer') {
-    return role;
-  }
-  if (role === 'user') {
-    return 'collaborator';
-  }
-  return 'observer';
+function normalizeLegacyRole(role: unknown): string {
+  return role === 'user' ? 'collaborator' : String(role ?? 'collaborator');
 }
 
 function getColumnNames(db: DatabaseType, table: string): string[] {
@@ -409,6 +459,25 @@ function getColumnNames(db: DatabaseType, table: string): string[] {
 
 function tableExists(db: DatabaseType, name: string): boolean {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'virtual table') AND name = ?").get(name));
+}
+
+function cleanupLegacyUsersTable(db: DatabaseType): void {
+  if (!tableExists(db, 'users_legacy')) {
+    return;
+  }
+
+  const lingeringRefs = db.prepare(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name <> 'users_legacy'
+      AND sql IS NOT NULL
+      AND sql LIKE '%users_legacy%'
+  `).all() as Array<{ name: string }>;
+
+  if (lingeringRefs.length === 0) {
+    db.exec('DROP TABLE users_legacy;');
+  }
 }
 
 function quoteIdentifier(identifier: string): string {

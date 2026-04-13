@@ -1,14 +1,17 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import type { FilesystemRootConfig } from './config.js';
 
 // ── URI types ──
 
-export type ReferenceTargetType = 'workspace-file' | 'artifact-document' | 'artifact-tree-file';
+export type ReferenceTargetType = 'workspace-file' | 'filesystem-file' | 'artifact-document' | 'artifact-tree-file';
 
 export interface ParsedTeepeeUri {
-  namespace: 'workspace' | 'artifact';
+  namespace: 'workspace' | 'artifact' | 'fs';
   /** repo-relative path for workspace, artifact id string for artifact */
   resource: string;
+  /** For fs: configured root id */
+  rootId?: string;
   /** For workspace: line number. For artifact: version number. */
   line?: number;
   column?: number;
@@ -27,11 +30,12 @@ export interface ResolvedReference {
   selection: { line: number | null; column: number | null };
   fetch:
     | { kind: 'workspace'; path: string }
+    | { kind: 'filesystem'; rootId: string; path: string }
     | { kind: 'artifact-document'; artifactId: number; version?: number };
 }
 
 export interface SuggestItem {
-  type: 'workspace_file' | 'artifact_document';
+  type: 'workspace_file' | 'filesystem_file' | 'artifact_document';
   label: string;
   insertText: string;
   canonicalUri: string;
@@ -94,6 +98,40 @@ function detectMimeLanguage(filePath: string): { mime: string; language: string 
   return EXT_MAP[ext] ?? { mime: 'application/octet-stream', language: 'plaintext' };
 }
 
+export function isLikelyTextBuffer(buffer: Buffer): boolean {
+  if (buffer.length === 0) return true;
+
+  let suspiciousControlBytes = 0;
+  for (const byte of buffer) {
+    if (byte === 0) return false;
+    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 12 && byte !== 13) {
+      suspiciousControlBytes += 1;
+    }
+  }
+
+  if (suspiciousControlBytes > Math.max(1, Math.floor(buffer.length * 0.02))) {
+    return false;
+  }
+
+  const decoded = buffer.toString('utf8');
+  let replacementChars = 0;
+  for (const char of decoded) {
+    if (char === '\uFFFD') replacementChars += 1;
+  }
+
+  return replacementChars <= Math.max(1, Math.floor(decoded.length * 0.01));
+}
+
+export function detectPreviewMimeLanguage(
+  filePath: string,
+  sample?: Buffer
+): { mime: string; language: string } {
+  const detected = detectMimeLanguage(filePath);
+  if (detected.mime !== 'application/octet-stream' || !sample) return detected;
+  if (!isLikelyTextBuffer(sample)) return detected;
+  return { mime: 'text/plain', language: 'plaintext' };
+}
+
 // ── URI parsing ──
 
 export function parseTeepeeUri(uri: string): ParsedTeepeeUri | null {
@@ -152,12 +190,44 @@ export function parseTeepeeUri(uri: string): ParsedTeepeeUri | null {
     return { namespace: 'artifact', resource: idStr, artifactVersion, treePath };
   }
 
+  if (rest.startsWith('fs/')) {
+    const pathWithFragment = rest.slice('fs/'.length);
+    const slashIdx = pathWithFragment.indexOf('/');
+    if (slashIdx <= 0) return null;
+
+    const rootId = pathWithFragment.slice(0, slashIdx);
+    const resourceWithFragment = pathWithFragment.slice(slashIdx + 1);
+    const hashIdx = resourceWithFragment.indexOf('#');
+    let filePath: string;
+    let line: number | undefined;
+    let column: number | undefined;
+
+    if (hashIdx >= 0) {
+      filePath = resourceWithFragment.slice(0, hashIdx);
+      const fragment = resourceWithFragment.slice(hashIdx + 1);
+      const lineMatch = fragment.match(/^L(\d+)(?:C(\d+))?$/);
+      if (lineMatch) {
+        line = parseInt(lineMatch[1]);
+        if (lineMatch[2]) column = parseInt(lineMatch[2]);
+      }
+    } else {
+      filePath = resourceWithFragment;
+    }
+
+    if (filePath.includes('..') || filePath.startsWith('/')) return null;
+    return { namespace: 'fs', rootId, resource: filePath, line, column };
+  }
+
   return null;
 }
 
 // ── Legacy href normalization ──
 
-export function normalizeLegacyHref(href: string, basePath: string): string | null {
+export function normalizeLegacyHref(
+  href: string,
+  basePath: string,
+  roots: FilesystemRootConfig[] = []
+): string | null {
   if (href.startsWith('teepee:/')) return href;
   if (href.startsWith('file://')) return null;
   if (!href.startsWith('/')) return null;
@@ -176,21 +246,32 @@ export function normalizeLegacyHref(href: string, basePath: string): string | nu
   }
 
   const normalizedBase = basePath.endsWith('/') ? basePath : basePath + '/';
-  if (!rawPath.startsWith(normalizedBase)) return null;
+  if (rawPath.startsWith(normalizedBase)) {
+    const relative = rawPath.slice(normalizedBase.length);
+    if (relative.includes('..')) return null;
 
-  const relative = rawPath.slice(normalizedBase.length);
-  if (relative.includes('..')) return null;
+    let uri = `teepee:/workspace/${relative}`;
+    if (lineNum !== undefined) uri += `#L${lineNum}`;
+    return uri;
+  }
 
-  let uri = `teepee:/workspace/${relative}`;
-  if (lineNum !== undefined) uri += `#L${lineNum}`;
-  return uri;
+  for (const root of roots) {
+    const relativeToRoot = relativePathWithinRoot(rawPath, root.resolvedPath);
+    if (!relativeToRoot || relativeToRoot.includes('..')) continue;
+    let fileUri = `teepee:/fs/${root.id}/${relativeToRoot}`;
+    if (lineNum !== undefined) fileUri += `#L${lineNum}`;
+    return fileUri;
+  }
+
+  return null;
 }
 
 // ── Server-side resolve ──
 
 export function resolveReference(
   uri: string,
-  basePath: string
+  basePath: string,
+  roots: FilesystemRootConfig[] = []
 ): ResolvedReference | null {
   const parsed = parseTeepeeUri(uri);
   if (!parsed) return null;
@@ -199,11 +280,11 @@ export function resolveReference(
     const fullPath = path.join(basePath, parsed.resource);
     const resolved = path.resolve(fullPath);
     const resolvedBase = path.resolve(basePath);
-    if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) return null;
+    if (!isWithinRoot(resolved, resolvedBase)) return null;
 
     try {
       const real = fs.realpathSync(resolved);
-      if (!real.startsWith(resolvedBase + path.sep) && real !== resolvedBase) return null;
+      if (!isWithinRoot(real, resolvedBase)) return null;
     } catch {
       // file doesn't exist yet — that's fine for resolve, the fetch will 404
     }
@@ -217,6 +298,33 @@ export function resolveReference(
       language,
       selection: { line: parsed.line ?? null, column: parsed.column ?? null },
       fetch: { kind: 'workspace', path: parsed.resource },
+    };
+  }
+
+  if (parsed.namespace === 'fs') {
+    const root = roots.find((entry) => entry.id === parsed.rootId);
+    if (!root) return null;
+
+    const fullPath = path.join(root.resolvedPath, parsed.resource);
+    const resolved = path.resolve(fullPath);
+    if (!isWithinRoot(resolved, root.resolvedPath)) return null;
+
+    try {
+      const real = fs.realpathSync(resolved);
+      if (!isWithinRoot(real, root.resolvedPath)) return null;
+    } catch {
+      // Missing file is resolved later by fetch.
+    }
+
+    const { mime, language } = detectMimeLanguage(parsed.resource);
+    return {
+      targetType: 'filesystem-file',
+      canonicalUri: uri,
+      displayName: path.basename(parsed.resource),
+      mime,
+      language,
+      selection: { line: parsed.line ?? null, column: parsed.column ?? null },
+      fetch: { kind: 'filesystem', rootId: root.id, path: parsed.resource },
     };
   }
 
@@ -344,3 +452,19 @@ export function isTextPreviewable(mime: string, fileSize: number): boolean {
 }
 
 export { detectMimeLanguage };
+
+function isWithinRoot(targetPath: string, rootPath: string): boolean {
+  const normalizedRoot = path.resolve(rootPath);
+  const normalizedTarget = path.resolve(targetPath);
+  if (normalizedRoot === path.parse(normalizedRoot).root) {
+    return normalizedTarget.startsWith(normalizedRoot);
+  }
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
+}
+
+function relativePathWithinRoot(targetPath: string, rootPath: string): string | null {
+  if (!isWithinRoot(targetPath, rootPath)) return null;
+  const relative = path.relative(rootPath, targetPath).replace(/\\/g, '/');
+  if (!relative || relative === '.') return null;
+  return relative;
+}

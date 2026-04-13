@@ -11,6 +11,9 @@ export interface TopicResponse {
   sort_order: number;
   archived: number;
   archived_at: string | null;
+  has_local_artifacts?: boolean;
+  queued_job_count?: number;
+  running_job_count?: number;
 }
 
 export interface AgentResponse {
@@ -54,6 +57,13 @@ export interface SessionResponse {
   email: string;
   handle: string | null;
   role: string;
+  isOwner?: boolean;
+  capabilities?: string[];
+  fileRoots?: Array<{
+    id: string;
+    kind: 'workspace' | 'host';
+    path: string;
+  }>;
 }
 
 export interface InviteLinkResponse {

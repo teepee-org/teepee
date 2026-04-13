@@ -69,25 +69,27 @@ describe('/api/project mode and bindHost', () => {
   let privatePort: number;
   let privateCookie: string;
   let privateTmpDir: string;
+  let privateConfigPath: string;
 
   let sharedServer: http.Server;
   let sharedClose: () => void;
   let sharedPort: number;
   let sharedCookie: string;
   let sharedTmpDir: string;
+  let sharedConfigPath: string;
 
   beforeAll(async () => {
     privateTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-private-'));
-    const privateConfig = writeConfig(privateTmpDir, 'private-test', 'private');
+    privateConfigPath = writeConfig(privateTmpDir, 'private-test', 'private');
     privatePort = 31000 + Math.floor(Math.random() * 5000);
-    const privateResult = startServer(privateConfig, privatePort);
+    const privateResult = startServer(privateConfigPath, privatePort);
     privateServer = privateResult.server;
     privateClose = privateResult.close;
 
     sharedTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-api-shared-'));
-    const sharedConfig = writeConfig(sharedTmpDir, 'shared-test', 'shared');
+    sharedConfigPath = writeConfig(sharedTmpDir, 'shared-test', 'shared');
     sharedPort = privatePort + 1;
-    const sharedResult = startServer(sharedConfig, sharedPort);
+    const sharedResult = startServer(sharedConfigPath, sharedPort);
     sharedServer = sharedResult.server;
     sharedClose = sharedResult.close;
 
@@ -134,5 +136,15 @@ describe('/api/project mode and bindHost', () => {
   it('includes name and language in project response', async () => {
     const res = await request(privatePort, 'GET', '/api/project', privateCookie);
     expect(res.body.name).toBe('private-test');
+  });
+
+  it('auto-migrates legacy startup config to version 2 with backup', () => {
+    const privateConfig = fs.readFileSync(privateConfigPath, 'utf-8');
+    const sharedConfig = fs.readFileSync(sharedConfigPath, 'utf-8');
+
+    expect(privateConfig).toContain('version: 2');
+    expect(sharedConfig).toContain('version: 2');
+    expect(fs.existsSync(path.join(privateTmpDir, '.teepee', 'config.v1.bak.yaml'))).toBe(true);
+    expect(fs.existsSync(path.join(sharedTmpDir, '.teepee', 'config.v1.bak.yaml'))).toBe(true);
   });
 });

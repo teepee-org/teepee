@@ -14,13 +14,13 @@ interface Props {
   artifactId: number;
   versionId: number;
   versionNumber?: number;
-  isOwner: boolean;
+  canPromote: boolean;
   onClose: () => void;
   projectPath?: string;
   onOpenReference?: (href: string) => void;
 }
 
-export function ArtifactViewer({ artifactId, versionId, versionNumber, isOwner, onClose, projectPath, onOpenReference }: Props) {
+export function ArtifactViewer({ artifactId, versionId, versionNumber, canPromote, onClose, projectPath, onOpenReference }: Props) {
   const [artifact, setArtifact] = useState<ArtifactSummary | null>(null);
   const [version, setVersion] = useState<ArtifactVersion | null>(null);
   const [versions, setVersions] = useState<ArtifactVersion[]>([]);
@@ -143,7 +143,7 @@ export function ArtifactViewer({ artifactId, versionId, versionNumber, isOwner, 
         <div className="artifact-viewer-actions">
           <button onClick={handleCopy}>Copy</button>
           <a href={artifactDownloadUrl(artifactId, version.id)} download>Download</a>
-          {isOwner && (
+          {canPromote && (
             <button onClick={handlePromote} disabled={promoting}>
               {promoting ? 'Promoting...' : 'Promote to repo'}
             </button>

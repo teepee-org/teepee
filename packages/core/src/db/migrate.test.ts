@@ -71,6 +71,90 @@ describe('runMigrations', () => {
     db.close();
   });
 
+  it('restarts legacy users migration when a stale users_v2 temp table is left behind', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE topics (
+        id INTEGER PRIMARY KEY,
+        sort_order REAL NOT NULL DEFAULT 0
+      );
+      CREATE TABLE users (
+        email TEXT PRIMARY KEY,
+        role TEXT NOT NULL
+      );
+      CREATE TABLE users_v2 (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        handle TEXT UNIQUE,
+        role TEXT NOT NULL DEFAULT 'collaborator',
+        status TEXT NOT NULL DEFAULT 'invited',
+        pre_revocation_status TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        accepted_at TEXT,
+        last_login_at TEXT
+      );
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY
+      );
+      INSERT INTO users (email, role) VALUES ('legacy@test.com', 'collaborator');
+      INSERT INTO users_v2 (id, email, role, status) VALUES ('stale', 'stale@test.com', 'observer', 'invited');
+    `);
+
+    runMigrations(db);
+
+    const rows = db.prepare('SELECT email, role, status FROM users ORDER BY email').all() as Array<{
+      email: string;
+      role: string;
+      status: string;
+    }>;
+    expect(rows).toEqual([
+      { email: 'legacy@test.com', role: 'collaborator', status: 'invited' },
+    ]);
+
+    db.close();
+  });
+
+  it('recovers when users was already renamed to users_legacy before an interrupted migration', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE topics (
+        id INTEGER PRIMARY KEY,
+        sort_order REAL NOT NULL DEFAULT 0
+      );
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        handle TEXT UNIQUE,
+        role TEXT NOT NULL DEFAULT 'collaborator' CHECK (role IN ('owner', 'collaborator', 'observer')),
+        status TEXT NOT NULL DEFAULT 'invited',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE users_legacy (
+        email TEXT PRIMARY KEY,
+        role TEXT NOT NULL
+      );
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY
+      );
+      INSERT INTO users_legacy (email, role) VALUES ('legacy@test.com', 'collaborator');
+    `);
+
+    runMigrations(db);
+
+    const rows = db.prepare('SELECT email, role, status FROM users ORDER BY email').all() as Array<{
+      email: string;
+      role: string;
+      status: string;
+    }>;
+    expect(rows).toEqual([
+      { email: 'legacy@test.com', role: 'collaborator', status: 'invited' },
+    ]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users_legacy'").get()).toBeUndefined();
+
+    db.close();
+  });
+
   it('backfills user_id into legacy auth and job tables', () => {
     const db = new Database(':memory:');
     db.exec(`

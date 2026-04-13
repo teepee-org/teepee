@@ -181,6 +181,7 @@ export interface MessageSendEvent {
   type: 'message.send';
   topicId: number;
   body: string;
+  clientMessageId?: string;
 }
 
 export interface CommandEvent {

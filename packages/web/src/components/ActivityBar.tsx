@@ -6,7 +6,7 @@ interface Props {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   archiveCount?: number;
-  isOwner?: boolean;
+  canViewAdmin?: boolean;
 }
 
 const TopicsIcon = () => (
@@ -44,7 +44,7 @@ const views: { id: ActivityView; Icon: () => React.JSX.Element; label: string }[
   { id: 'settings', Icon: SettingsIcon, label: 'Settings' },
 ];
 
-export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onToggleSidebar, archiveCount, isOwner }: Props) {
+export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onToggleSidebar, archiveCount, canViewAdmin }: Props) {
   const handleClick = (view: ActivityView) => {
     if (view === activeView && !sidebarCollapsed) {
       onToggleSidebar();
@@ -54,7 +54,7 @@ export function ActivityBar({ activeView, onChangeView, sidebarCollapsed, onTogg
     }
   };
 
-  const visibleViews = isOwner ? views : views.filter((v) => v.id !== 'settings');
+  const visibleViews = canViewAdmin ? views : views.filter((v) => v.id !== 'settings');
 
   return (
     <div className="activity-bar">

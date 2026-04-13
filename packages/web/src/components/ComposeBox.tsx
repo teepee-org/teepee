@@ -4,6 +4,7 @@ import type { CommandDef } from '../buildHelpMarkdown';
 import { suggestReferences, type ReferenceSuggestItem } from '../api';
 
 type AutocompleteMode = 'agent' | 'command' | 'reference' | null;
+type ReferenceAutocompleteScope = 'inherited' | 'global';
 
 // Module-level history map — survives component unmount/remount (Admin view, no active topic)
 const historyMap = new Map<number, string[]>();
@@ -11,6 +12,21 @@ const historyMap = new Map<number, string[]>();
 /** Exported for testing only. */
 export function _resetHistoryForTests() {
   historyMap.clear();
+}
+
+function parseReferenceAutocomplete(raw: string): {
+  query: string;
+  scope: ReferenceAutocompleteScope;
+} {
+  const trimmed = raw.trimStart();
+  if (!trimmed.startsWith('!')) {
+    return { query: raw, scope: 'inherited' };
+  }
+
+  return {
+    query: trimmed.slice(1).trimStart(),
+    scope: 'global',
+  };
 }
 
 interface Props {
@@ -218,13 +234,27 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     const bracketIdx = before.lastIndexOf('[[');
     if (bracketIdx === -1) return;
 
-    const newText = before.slice(0, bracketIdx) + item.insertText + ' ' + after;
+    const suffix = item.continueAutocomplete ? '' : ' ';
+    const newText = before.slice(0, bracketIdx) + item.insertText + suffix + after;
     setText(newText);
-    setAcMode(null);
-    setRefSuggestions([]);
+    setSelectedIdx(0);
+
+    if (item.continueAutocomplete) {
+      const partial = item.insertText.startsWith('[[') ? item.insertText.slice(2) : item.insertText;
+      const { query, scope } = parseReferenceAutocomplete(partial);
+      setAutocompleteFilter(partial);
+      setAcMode('reference');
+      setRefSuggestions([]);
+      suggestReferences(query, topicId, 15, scope)
+        .then((res) => setRefSuggestions(res.items))
+        .catch(() => setRefSuggestions([]));
+    } else {
+      setAcMode(null);
+      setRefSuggestions([]);
+    }
 
     setTimeout(() => {
-      const newPos = bracketIdx + item.insertText.length + 1;
+      const newPos = bracketIdx + item.insertText.length + suffix.length;
       textarea.setSelectionRange(newPos, newPos);
       textarea.focus();
     }, 0);
@@ -257,12 +287,13 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     if (bracketIdx !== -1 && !before.slice(bracketIdx).includes(']]')) {
       const partial = before.slice(bracketIdx + 2);
       if (!partial.includes('\n')) {
+        const { query, scope } = parseReferenceAutocomplete(partial);
         setAutocompleteFilter(partial);
         setSelectedIdx(0);
         setAcMode('reference');
         if (refDebounceRef.current) clearTimeout(refDebounceRef.current);
         refDebounceRef.current = setTimeout(() => {
-          suggestReferences(partial, topicId, 15)
+          suggestReferences(query, topicId, 15, scope)
             .then((res) => setRefSuggestions(res.items))
             .catch(() => setRefSuggestions([]));
         }, 150);
@@ -335,7 +366,13 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
               className={`autocomplete-item ${i === selectedIdx ? 'selected' : ''}`}
               onClick={() => insertReference(item)}
             >
-              <span className="autocomplete-ref-icon">{item.type === 'artifact_document' ? '📄' : '📁'}</span>
+              <span className="autocomplete-ref-icon">
+                {item.type === 'artifact_document'
+                  ? '📄'
+                  : item.type === 'workspace_dir' || item.type === 'filesystem_dir'
+                    ? '📁'
+                    : '🗂️'}
+              </span>
               <span className="autocomplete-ref-label">{item.label}</span>
               <span className="autocomplete-provider">{item.description}</span>
             </div>
@@ -353,7 +390,7 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
       />
       {!disabled && (
         <div className="compose-hint">
-          <code>/help</code> commands · <code>@</code> agents · <code>[[</code> files
+          <code>/help</code> commands · <code>@</code> agents · <code>[[</code> refs · <code>[[/path</code> host fs · <code>[[!</code> all docs
         </div>
       )}
     </div>

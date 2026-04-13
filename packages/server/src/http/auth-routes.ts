@@ -1,6 +1,9 @@
 import * as http from 'http';
 import {
   createSession,
+  isOwnerRole,
+  listAccessibleFilesystemRoots,
+  listRoleCapabilities,
   validateToken,
   acceptInvite,
   deleteSession,
@@ -50,7 +53,19 @@ export function handleAuthRoute(
         json({ error: 'Private mode is owner-only' }, 403);
         return true;
       }
-      json({ id: user.id, email: user.email, handle: user.handle, role: user.role });
+      json({
+        id: user.id,
+        email: user.email,
+        handle: user.handle,
+        role: user.role,
+        isOwner: isOwnerRole(user.role),
+        capabilities: listRoleCapabilities(ctx.config, user.role),
+        fileRoots: listAccessibleFilesystemRoots(ctx.config, user.role).map((root) => ({
+          id: root.id,
+          kind: root.kind,
+          path: root.path,
+        })),
+      });
     } else {
       json({ error: 'Not authenticated' }, 401);
     }
@@ -88,7 +103,19 @@ export function handleAuthRoute(
           req.headers['user-agent'], getClientIp(ctx.config, req));
         if (result.ok) {
           setSessionCookie(ctx.config, req, res, result.sessionId!);
-          json({ id: result.user?.id, email: result.user?.email, handle: result.user?.handle, role: result.user?.role });
+          json({
+            id: result.user?.id,
+            email: result.user?.email,
+            handle: result.user?.handle,
+            role: result.user?.role,
+            isOwner: isOwnerRole(result.user?.role ?? ''),
+            capabilities: listRoleCapabilities(ctx.config, result.user?.role ?? ''),
+            fileRoots: listAccessibleFilesystemRoots(ctx.config, result.user?.role ?? '').map((root) => ({
+              id: root.id,
+              kind: root.kind,
+              path: root.path,
+            })),
+          });
         } else {
           json({ error: result.error }, 400);
         }

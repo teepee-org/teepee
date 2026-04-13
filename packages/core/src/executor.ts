@@ -91,6 +91,16 @@ export function buildContext(
     lines.push('');
   }
 
+  if (topicArtifacts !== undefined) {
+    lines.push('[user-input]');
+    lines.push('You may request structured human input by writing user-input.json under $TEEPEE_OUTPUT_DIR.');
+    lines.push('Do not wait for stdin. Teepee will pause the job and reinvoke you with [user-input-results].');
+    lines.push('Use this only when you are blocked on a human decision that materially changes the next action.');
+    lines.push('At most one pending input request is allowed per job.');
+    lines.push('In v1, only the user who started the job can answer.');
+    lines.push('');
+  }
+
   if (artifactOpResults) {
     lines.push('[artifact-op-results]');
     lines.push(artifactOpResults);
@@ -100,16 +110,6 @@ export function buildContext(
   if (artifactWriteError) {
     lines.push('[artifact-write-error]');
     lines.push(artifactWriteError);
-    lines.push('');
-  }
-
-  if (topicArtifacts !== undefined) {
-    lines.push('[user-input]');
-    lines.push('You may request structured human input by writing user-input.json under $TEEPEE_OUTPUT_DIR.');
-    lines.push('Do not wait for stdin. Teepee will pause the job and reinvoke you with [user-input-results].');
-    lines.push('Use this only when you are blocked on a human decision that materially changes the next action.');
-    lines.push('At most one pending input request is allowed per job.');
-    lines.push('In v1, only the user who started the job can answer.');
     lines.push('');
   }
 

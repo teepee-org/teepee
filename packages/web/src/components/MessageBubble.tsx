@@ -18,16 +18,17 @@ export function MessageBubble({ message, highlighted = false, onOpenArtifact, pr
   const isSystem = message.author_type === 'system';
   const isAgent = message.author_type === 'agent';
   const isRichSystem = isSystem && message.body.includes('\n');
+  const deliveryStatus = message.delivery_status;
 
   useEffect(() => {
-    if (isAgent && message.id > 0) {
+    if (isAgent && typeof message.id === 'number' && message.id > 0) {
       fetchMessageArtifacts(message.id).then(setArtifacts).catch(() => {});
     }
   }, [message.id, isAgent]);
 
   return (
     <div
-      className={`message ${message.author_type}${isRichSystem ? ' system-rich' : ''}${highlighted ? ' highlighted' : ''}`}
+      className={`message ${message.author_type}${isRichSystem ? ' system-rich' : ''}${highlighted ? ' highlighted' : ''}${deliveryStatus ? ` ${deliveryStatus}` : ''}`}
       data-message-id={message.id}
     >
       <div className="message-header">
@@ -39,6 +40,14 @@ export function MessageBubble({ message, highlighted = false, onOpenArtifact, pr
         <span className="timestamp">
           {new Date(message.created_at).toLocaleTimeString()}
         </span>
+        {deliveryStatus === 'pending' && (
+          <span className="delivery-status pending">sending</span>
+        )}
+        {deliveryStatus === 'failed' && (
+          <span className="delivery-status failed" title={message.delivery_error || 'Message delivery failed'}>
+            failed
+          </span>
+        )}
         {!isSystem && (
           <button
             className="raw-toggle"
@@ -58,6 +67,9 @@ export function MessageBubble({ message, highlighted = false, onOpenArtifact, pr
           </MarkdownRenderer>
         )}
       </div>
+      {deliveryStatus === 'failed' && message.delivery_error && (
+        <div className="message-delivery-error">{message.delivery_error}</div>
+      )}
       {artifacts.length > 0 && (
         <div className="message-artifacts">
           {artifacts.map((a) => (

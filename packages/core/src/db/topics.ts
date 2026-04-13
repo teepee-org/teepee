@@ -64,7 +64,28 @@ export function restoreTopic(db: DatabaseType, topicId: number): void {
   db.prepare('UPDATE topics SET archived = 0, archived_at = NULL WHERE id = ?').run(topicId);
 }
 
+// ── Rename ──
+
+export function renameTopic(db: DatabaseType, topicId: number, name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Topic name cannot be empty');
+  db.prepare('UPDATE topics SET name = ? WHERE id = ?').run(trimmed, topicId);
+}
+
 // ── Hierarchy helpers ──
+
+/** Return [topicId, parentId, grandparentId, ..., rootId]. */
+export function getTopicLineage(db: DatabaseType, topicId: number): number[] {
+  const lineage: number[] = [];
+  let current: number | null = topicId;
+  while (current !== null) {
+    lineage.push(current);
+    const row = db.prepare('SELECT parent_topic_id FROM topics WHERE id = ?').get(current) as { parent_topic_id: number | null } | undefined;
+    if (!row) break;
+    current = row.parent_topic_id;
+  }
+  return lineage;
+}
 
 /** Check if `ancestorId` is an ancestor of `topicId` (or equal to it). */
 export function isAncestorOf(db: DatabaseType, ancestorId: number, topicId: number): boolean {

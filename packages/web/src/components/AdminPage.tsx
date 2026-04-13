@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface User {
   email: string;
@@ -13,14 +13,16 @@ interface Agent {
   provider: string;
 }
 
-type AccessProfile = 'deny' | 'readonly' | 'readwrite' | 'trusted';
-type UserRole = 'owner' | 'collaborator' | 'observer';
+type AccessProfile = 'deny' | 'readonly' | 'draft' | 'readwrite' | 'trusted';
 
 interface AccessMatrix {
-  roles: UserRole[];
+  roles: string[];
+  assignable_roles: string[];
   profiles: AccessProfile[];
+  capabilities: string[];
   agents: Agent[];
-  matrix: Record<UserRole, Record<string, Exclude<AccessProfile, 'deny'>>>;
+  matrix: Record<string, Record<string, Exclude<AccessProfile, 'deny'>>>;
+  role_capabilities: Record<string, string[]>;
   mode: 'private' | 'shared';
   source: string;
   editable: boolean;
@@ -37,17 +39,11 @@ export function AdminPage({ agents, mode }: Props) {
   const [section, setSection] = useState<Section>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [accessMatrix, setAccessMatrix] = useState<AccessMatrix | null>(null);
-
-  // Invite form
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('collaborator');
+  const [inviteRole, setInviteRole] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [inviteError, setInviteError] = useState('');
-
-  // Revoked section
   const [revokedExpanded, setRevokedExpanded] = useState(false);
-
-  // Delete confirmation
   const [deleteConfirmEmail, setDeleteConfirmEmail] = useState<string | null>(null);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
 
@@ -66,12 +62,49 @@ export function AdminPage({ agents, mode }: Props) {
     loadAccessMatrix();
   }, []);
 
+  const availableRoles = accessMatrix?.roles ?? [];
+  const assignableRoles = accessMatrix?.assignable_roles ?? [];
+  const matrixAgents = accessMatrix?.agents ?? agents;
+  const workspaceMode = accessMatrix?.mode ?? mode;
+  const ownerCount = users.filter((u) => u.role === 'owner' && u.status !== 'revoked').length;
+  const activeUsers = users.filter((u) => u.status !== 'revoked');
+  const revokedUsers = users.filter((u) => u.status === 'revoked');
+
+  useEffect(() => {
+    if (!inviteRole && assignableRoles.length > 0) {
+      setInviteRole(assignableRoles[0]);
+    }
+    if (inviteRole && assignableRoles.length > 0 && !assignableRoles.includes(inviteRole)) {
+      setInviteRole(assignableRoles[0]);
+    }
+  }, [assignableRoles, inviteRole]);
+
+  const getAccess = (role: string, agent: string): AccessProfile => {
+    return accessMatrix?.matrix?.[role]?.[agent] ?? 'deny';
+  };
+
+  const summarizeRoleAccess = (role: string): string => {
+    const capabilities = accessMatrix?.role_capabilities?.[role] ?? [];
+    const capabilityLines = capabilities.length > 0
+      ? [`Capabilities: ${capabilities.join(', ')}`]
+      : ['Capabilities: none'];
+    const agentLines = matrixAgents
+      .map((agent) => `@${agent.name}: ${getAccess(role, agent.name)}`)
+      .filter((line) => !line.endsWith(': deny'));
+    return [...capabilityLines, agentLines.length > 0 ? 'Agents:' : 'Agents: none', ...agentLines].join('\n');
+  };
+
+  const roleSummary = (role: string): string => {
+    const capabilities = accessMatrix?.role_capabilities?.[role] ?? [];
+    const visibleAgents = matrixAgents.filter((agent) => getAccess(role, agent.name) !== 'deny').length;
+    return `${capabilities.length} capabilities · ${visibleAgents} agents`;
+  };
+
   const handleInvite = async () => {
-    if (!inviteEmail.trim()) return;
+    if (!inviteEmail.trim() || !inviteRole) return;
     setInviteError('');
     setInviteLink('');
     try {
-      // Create invite
       const res = await fetch('/api/admin/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -122,12 +155,21 @@ export function AdminPage({ agents, mode }: Props) {
     loadUsers();
   };
 
-  const handleChangeRole = async (email: string, role: UserRole) => {
+  const handleChangeRole = async (email: string, role: string) => {
     const current = users.find((u) => u.email === email);
     if (!current || current.role === role) return;
-    const preview = summarizeRoleAccess(role);
-    const confirmation = confirm(`Change ${email} to ${role}?\n\nEffective agent access:\n${preview}`);
-    if (!confirmation) return;
+
+    if (role === 'owner') {
+      const confirmation = prompt(`Promote ${email} to owner? Type the email to confirm.`);
+      if (confirmation !== email) return;
+    } else if (current.role === 'owner') {
+      const confirmation = prompt(`Change ${email} from owner to ${role}? Type the email to confirm.`);
+      if (confirmation !== email) return;
+    } else {
+      const confirmation = confirm(`Change ${email} to ${role}?\n\n${summarizeRoleAccess(role)}`);
+      if (!confirmation) return;
+    }
+
     const res = await fetch('/api/admin/role', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -138,109 +180,75 @@ export function AdminPage({ agents, mode }: Props) {
     loadUsers();
   };
 
-  const activeUsers = users.filter((u) => u.status !== 'revoked');
-  const revokedUsers = users.filter((u) => u.status === 'revoked');
-  const matrixAgents = accessMatrix?.agents ?? agents;
-  const workspaceMode = accessMatrix?.mode ?? mode;
+  const renderUserActions = (user: User) => (
+    <div className="admin-row-actions">
+      {user.status === 'revoked' ? (
+        <>
+          <button className="btn-success" onClick={() => handleReEnable(user.email)}>Re-enable</button>
+          <button className="danger" onClick={() => { setDeleteConfirmEmail(user.email); setDeleteConfirmInput(''); }}>Delete</button>
+        </>
+      ) : (
+        <>
+          <button className="danger" onClick={() => handleRevoke(user.email)}>Revoke</button>
+          <button className="danger" onClick={() => { setDeleteConfirmEmail(user.email); setDeleteConfirmInput(''); }}>Delete</button>
+        </>
+      )}
+    </div>
+  );
 
-  const handlePromote = async (email: string) => {
-    const confirmation = prompt(`Promote ${email} to owner? This grants full admin access. Type the email to confirm.`);
-    if (confirmation !== email) return;
-    const res = await fetch('/api/admin/promote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    loadUsers();
-  };
+  const renderRoleCell = (user: User) => {
+    const roleKnown = availableRoles.includes(user.role);
+    const selectableRoles = roleKnown ? availableRoles : [user.role, ...availableRoles];
+    const disableRoleSelect = user.role === 'owner' && ownerCount <= 1;
 
-  const handleDemote = async (email: string) => {
-    const confirmation = prompt(`Demote ${email} from owner to collaborator? Type the email to confirm.`);
-    if (confirmation !== email) return;
-    const res = await fetch('/api/admin/demote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
-    const data = await res.json();
-    if (data.error) alert(data.error);
-    loadUsers();
-  };
-
-  const ownerCount = users.filter((u) => u.role === 'owner' && u.status !== 'revoked').length;
-
-  const renderUserActions = (u: User) => {
-    if (u.role === 'owner') {
-      return u.status !== 'revoked' && ownerCount > 1 ? (
-        <div className="admin-row-actions">
-          <button onClick={() => handleDemote(u.email)}>Demote</button>
-        </div>
-      ) : null;
+    if (user.status === 'revoked') {
+      return (
+        <>
+          <span className={`role-badge role-${user.role}`}>{user.role}</span>
+          {!roleKnown && <div className="muted">Missing from config, fail-closed.</div>}
+        </>
+      );
     }
+
     return (
-      <div className="admin-row-actions">
-        {u.status === 'revoked' ? (
-          <>
-            <button className="btn-success" onClick={() => handleReEnable(u.email)}>Re-enable</button>
-            <button className="danger" onClick={() => { setDeleteConfirmEmail(u.email); setDeleteConfirmInput(''); }}>Delete</button>
-          </>
-        ) : (
-          <>
-            {u.status === 'active' && u.role === 'collaborator' && (
-              <button onClick={() => handlePromote(u.email)}>Promote to owner</button>
-            )}
-            <button className="danger" onClick={() => handleRevoke(u.email)}>Revoke</button>
-            <button className="danger" onClick={() => { setDeleteConfirmEmail(u.email); setDeleteConfirmInput(''); }}>Delete</button>
-          </>
-        )}
-      </div>
+      <>
+        <select
+          className={`role-select role-${user.role}`}
+          value={user.role}
+          onChange={(e) => handleChangeRole(user.email, e.target.value)}
+          disabled={disableRoleSelect}
+        >
+          {!roleKnown && <option value={user.role}>{user.role} (missing in config)</option>}
+          {selectableRoles.filter((role, index, all) => all.indexOf(role) === index).map((role) => (
+            <option key={role} value={role}>{role}</option>
+          ))}
+        </select>
+        {!roleKnown && <div className="muted">Missing from config, fail-closed.</div>}
+      </>
     );
   };
 
-  const renderUserRow = (u: User) => (
-    <tr key={u.email}>
-      <td>{u.email}</td>
-      <td>{u.handle || <span className="muted">pending</span>}</td>
+  const renderUserRow = (user: User) => (
+    <tr key={user.email}>
+      <td>{user.email}</td>
+      <td>{user.handle || <span className="muted">pending</span>}</td>
+      <td>{renderRoleCell(user)}</td>
       <td>
-        {u.status === 'revoked' ? (
-          <span className={`role-badge role-${u.role}`}>{u.role}</span>
-        ) : (
-          <select
-            className={`role-select role-${u.role}`}
-            value={u.role}
-            onChange={(e) => handleChangeRole(u.email, e.target.value as UserRole)}
-            disabled={u.role === 'owner' && ownerCount <= 1}
-          >
-            <option value="owner">owner</option>
-            <option value="collaborator">collaborator</option>
-            <option value="observer">observer</option>
-          </select>
-        )}
-      </td>
-      <td>
-        <span className={`status-badge status-${u.status}`}>{u.status}</span>
-        {u.status === 'revoked' && u.revoked_at && (
+        <span className={`status-badge status-${user.status}`}>{user.status}</span>
+        {user.status === 'revoked' && user.revoked_at && (
           <span className="muted" style={{ marginLeft: 6, fontSize: '0.85em' }}>
-            {new Date(u.revoked_at).toLocaleDateString()}
+            {new Date(user.revoked_at).toLocaleDateString()}
           </span>
         )}
       </td>
-      <td>{renderUserActions(u)}</td>
+      <td>{renderUserActions(user)}</td>
     </tr>
   );
 
-  const getAccess = (role: UserRole, agent: string): AccessProfile => {
-    return accessMatrix?.matrix?.[role]?.[agent] ?? 'deny';
-  };
-
-  const summarizeRoleAccess = (role: UserRole): string => {
-    const lines = matrixAgents
-      .map((agent) => `@${agent.name}: ${getAccess(role, agent.name)}`)
-      .filter((line) => !line.endsWith(': deny'));
-    return lines.length > 0 ? lines.join('\n') : 'No agent invocation access';
-  };
+  const roleRows = useMemo(() => availableRoles.map((role) => ({
+    role,
+    capabilities: accessMatrix?.role_capabilities?.[role] ?? [],
+  })), [availableRoles, accessMatrix]);
 
   return (
     <div className="admin-page">
@@ -257,7 +265,6 @@ export function AdminPage({ agents, mode }: Props) {
       </div>
 
       <div className="admin-content">
-        {/* ─── Delete confirmation dialog ─── */}
         {deleteConfirmEmail && (
           <div className="modal-overlay" onClick={() => setDeleteConfirmEmail(null)}>
             <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
@@ -288,11 +295,10 @@ export function AdminPage({ agents, mode }: Props) {
           </div>
         )}
 
-        {/* ─── Users ─── */}
         {section === 'users' && (
           <div>
             <h2>Users</h2>
-            <p className="admin-desc">Assign a role to each user. Agent access comes from .teepee/config.yaml.</p>
+            <p className="admin-desc">Assign any configured role. Missing roles stay fail-closed until remapped.</p>
             <table className="admin-table">
               <thead>
                 <tr>
@@ -337,11 +343,10 @@ export function AdminPage({ agents, mode }: Props) {
           </div>
         )}
 
-        {/* ─── Invite ─── */}
         {section === 'invite' && workspaceMode === 'shared' && (
           <div>
             <h2>Invite user</h2>
-            <p className="admin-desc">Generate a magic link to invite someone to this Teepee.</p>
+            <p className="admin-desc">Generate a magic link for any non-owner role defined in .teepee/config.yaml.</p>
 
             <div className="tos-warning">
               <strong>Shared-use notice:</strong> If invited users will access agents backed by paid third-party services, verify that those services' Terms of Service allow shared or team use. Teepee does not grant additional usage rights.
@@ -361,36 +366,52 @@ export function AdminPage({ agents, mode }: Props) {
             <div className="form-group">
               <label>Role</label>
               <div className="radio-group">
-                <label className="radio-label">
-                  <input type="radio" name="role" value="collaborator" checked={inviteRole === 'collaborator'} onChange={() => setInviteRole('collaborator')} />
-                  <div>
-                    <strong>Collaborator</strong>
-                    <span>Can read, write, and tag agents</span>
-                  </div>
-                </label>
-                <label className="radio-label">
-                  <input type="radio" name="role" value="observer" checked={inviteRole === 'observer'} onChange={() => setInviteRole('observer')} />
-                  <div>
-                    <strong>Observer</strong>
-                    <span>Read-only access, cannot post or tag</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Effective agent access</label>
-              <div className="role-preview">
-                {matrixAgents.map((agent) => (
-                  <div key={agent.name} className={`profile-pill profile-${getAccess(inviteRole as UserRole, agent.name)}`}>
-                    <span>@{agent.name}</span>
-                    <strong>{getAccess(inviteRole as UserRole, agent.name)}</strong>
-                  </div>
+                {assignableRoles.map((role) => (
+                  <label key={role} className="radio-label">
+                    <input type="radio" name="role" value={role} checked={inviteRole === role} onChange={() => setInviteRole(role)} />
+                    <div>
+                      <strong>{role}</strong>
+                      <span>{roleSummary(role)}</span>
+                    </div>
+                  </label>
                 ))}
+                {assignableRoles.length === 0 && (
+                  <div className="muted">No assignable roles configured.</div>
+                )}
               </div>
             </div>
 
-            <button className="btn-primary" onClick={handleInvite} disabled={!inviteEmail.trim()}>
+            {inviteRole && (
+              <>
+                <div className="form-group">
+                  <label>Capabilities</label>
+                  <div className="role-preview">
+                    {(accessMatrix?.role_capabilities?.[inviteRole] ?? []).map((capability) => (
+                      <div key={capability} className="profile-pill">
+                        <span>{capability}</span>
+                      </div>
+                    ))}
+                    {(accessMatrix?.role_capabilities?.[inviteRole] ?? []).length === 0 && (
+                      <span className="muted">No product capabilities</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Effective agent access</label>
+                  <div className="role-preview">
+                    {matrixAgents.map((agent) => (
+                      <div key={agent.name} className={`profile-pill profile-${getAccess(inviteRole, agent.name)}`}>
+                        <span>@{agent.name}</span>
+                        <strong>{getAccess(inviteRole, agent.name)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <button className="btn-primary" onClick={handleInvite} disabled={!inviteEmail.trim() || !inviteRole}>
               Generate invite link
             </button>
 
@@ -408,28 +429,47 @@ export function AdminPage({ agents, mode }: Props) {
           </div>
         )}
 
-        {/* ─── Agents ─── */}
         {section === 'agents' && (
           <div>
             <h2>Roles & Agents</h2>
             <p className="admin-desc">Access matrix from {accessMatrix?.source ?? '.teepee/config.yaml'}. Restart Teepee to apply config changes.</p>
+
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th>Capabilities</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roleRows.map(({ role, capabilities }) => (
+                  <tr key={role}>
+                    <td>{role}</td>
+                    <td>{capabilities.length > 0 ? capabilities.join(', ') : <span className="muted">none</span>}</td>
+                    <td>{roleSummary(role)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
             <table className="admin-table">
               <thead>
                 <tr>
                   <th>Agent</th>
                   <th>Provider</th>
-                  <th>owner</th>
-                  <th>collaborator</th>
-                  <th>observer</th>
+                  {availableRoles.map((role) => (
+                    <th key={role}>{role}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {matrixAgents.map((a) => (
-                  <tr key={a.name}>
-                    <td>@{a.name}</td>
-                    <td>{a.provider}</td>
-                    {(['owner', 'collaborator', 'observer'] as UserRole[]).map((role) => {
-                      const profile = getAccess(role, a.name);
+                {matrixAgents.map((agent) => (
+                  <tr key={agent.name}>
+                    <td>@{agent.name}</td>
+                    <td>{agent.provider}</td>
+                    {availableRoles.map((role) => {
+                      const profile = getAccess(role, agent.name);
                       return (
                         <td key={role}>
                           <span className={`profile-badge profile-${profile}`}>{profile}</span>
@@ -443,11 +483,10 @@ export function AdminPage({ agents, mode }: Props) {
           </div>
         )}
 
-        {/* ─── General ─── */}
         {section === 'settings' && (
           <div>
             <h2>General</h2>
-            <p className="admin-desc">Teepee instance settings.</p>
+            <p className="admin-desc">Workspace policy is loaded from config; user assignments live in the database.</p>
             <div className="settings-info">
               <div className="setting-row">
                 <span className="setting-label">Mode</span>
@@ -456,6 +495,14 @@ export function AdminPage({ agents, mode }: Props) {
               <div className="setting-row">
                 <span className="setting-label">Config file</span>
                 <span className="setting-value">.teepee/config.yaml</span>
+              </div>
+              <div className="setting-row">
+                <span className="setting-label">Roles</span>
+                <span className="setting-value">{availableRoles.length}</span>
+              </div>
+              <div className="setting-row">
+                <span className="setting-label">Capability catalog</span>
+                <span className="setting-value">{accessMatrix?.capabilities.length ?? 0}</span>
               </div>
               <div className="setting-row">
                 <span className="setting-label">Agents</span>

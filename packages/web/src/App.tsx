@@ -10,13 +10,13 @@ import { SearchPanel } from './components/SearchPanel';
 import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
 import {
-  fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, postMessage,
-  fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic, fetchPresence,
-  fetchTopicInputRequests, answerInputRequest, cancelInputRequest,
+  fetchTopics, fetchAgents, fetchProject, createTopic, fetchMessages, fetchMessagesAround, postMessage,
+  fetchArchivedTopics, apiArchiveTopic, apiRestoreTopic, apiRenameTopic, fetchPresence,
+  fetchTopicInputRequests, fetchActiveTopicJobs, answerInputRequest, cancelInputRequest,
 } from './api';
-import type { ProjectInfo, PresenceEntry, PendingInputRequest } from './api';
+import type { ProjectInfo, PresenceEntry, PendingInputRequest, TopicJobSnapshot } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
-import type { MessageSearchResult } from 'teepee-core';
+import type { Capability, MessageSearchResult } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface ActiveJob {
@@ -32,6 +32,8 @@ interface AuthUser {
   email: string;
   handle: string | null;
   role: string;
+  isOwner: boolean;
+  capabilities: Capability[];
 }
 
 interface DemoRunState {
@@ -54,6 +56,67 @@ const DEMO_PROMPTS = [
   '@architect propose 1 small but worthwhile feature for this workspace, then turn it into a concrete task for "@coder".',
 ];
 
+function toSentMessage(message: Message): Message {
+  return {
+    ...message,
+    delivery_status: 'sent',
+    delivery_error: undefined,
+  };
+}
+
+function mergeSnapshotWithLocal(serverMessages: Message[], currentMessages: Message[]): Message[] {
+  const normalized = serverMessages.map(toSentMessage);
+  const seenClientIds = new Set(
+    normalized
+      .map((message) => message.client_message_id)
+      .filter((value): value is string => Boolean(value))
+  );
+  const pendingLocal = currentMessages.filter((message) => (
+    message.delivery_status &&
+    message.delivery_status !== 'sent' &&
+    (!message.client_message_id || !seenClientIds.has(message.client_message_id))
+  ));
+  return [...normalized, ...pendingLocal];
+}
+
+function upsertMessage(prev: Message[], nextMessage: Message): Message[] {
+  const normalized = toSentMessage(nextMessage);
+  const nextClientId = normalized.client_message_id ?? null;
+  const index = prev.findIndex((message) => (
+    message.id === normalized.id ||
+    (nextClientId && message.client_message_id === nextClientId)
+  ));
+  if (index === -1) {
+    return [...prev, normalized];
+  }
+  const next = prev.slice();
+  next[index] = normalized;
+  return next;
+}
+
+function updateLocalMessage(
+  prev: Message[],
+  clientMessageId: string,
+  updater: (message: Message) => Message
+): Message[] {
+  let changed = false;
+  const next = prev.map((message) => {
+    if (message.client_message_id !== clientMessageId) {
+      return message;
+    }
+    changed = true;
+    return updater(message);
+  });
+  return changed ? next : prev;
+}
+
+function createClientMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -74,6 +137,7 @@ export function App() {
   const [activeView, setActiveView] = useState<ActivityView>(() => {
     return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
   });
+  const activeTopicIdRef = useRef<number | null>(null);
 
   const { width: sidebarWidth, collapsed: sidebarCollapsed, resizing, handleProps, toggleCollapsed } = useResizable({
     initialWidth: 260,
@@ -121,6 +185,10 @@ export function App() {
     localStorage.setItem('teepee-active-view', activeView);
   }, [activeView]);
 
+  useEffect(() => {
+    activeTopicIdRef.current = activeTopicId;
+  }, [activeTopicId]);
+
   const demoEnabled = DEMO_MODE_FROM_URL || Boolean(project?.demo?.enabled);
   const demoTopicName =
     DEMO_TOPIC_NAME_FROM_URL ||
@@ -140,6 +208,8 @@ export function App() {
   // Derive active jobs for the current topic from the per-topic map
   const activeJobs = activeTopicId ? (jobsByTopic[activeTopicId] || []) : [];
   const activeInputRequests = activeTopicId ? (inputRequestsByTopic[activeTopicId] || []) : [];
+  const authCapabilities = useMemo(() => new Set<Capability>(authUser?.capabilities ?? []), [authUser]);
+  const can = useCallback((capability: Capability) => authCapabilities.has(capability), [authCapabilities]);
 
   // Helper to update jobs for a specific topic
   const updateTopicJobs = useCallback(
@@ -162,36 +232,80 @@ export function App() {
     []
   );
 
+  const syncTopicJobsFromSnapshot = useCallback((topicId: number, snapshot: TopicJobSnapshot[]) => {
+    setJobsByTopic((prev) => {
+      const existing = prev[topicId] || [];
+      const existingById = new Map(existing.map((job) => [job.jobId, job]));
+      const next = snapshot.map((job) => {
+        const current = existingById.get(job.id);
+        return {
+          jobId: job.id,
+          agentName: job.agent_name,
+          status: job.status,
+          streamContent: current?.streamContent || '',
+          error: job.error ?? current?.error,
+        } satisfies ActiveJob;
+      });
+      return { ...prev, [topicId]: next };
+    });
+  }, []);
+
+  const refreshTopicRuntime = useCallback(async (topicId: number) => {
+    const [requests, jobs] = await Promise.all([
+      fetchTopicInputRequests(topicId),
+      fetchActiveTopicJobs(topicId),
+    ]);
+    setInputRequestsByTopic((prev) => ({ ...prev, [topicId]: requests }));
+    syncTopicJobsFromSnapshot(topicId, jobs);
+  }, [syncTopicJobsFromSnapshot]);
+
+  const refreshTopicSnapshot = useCallback(async (topicId: number, aroundMessageId?: number) => {
+    const messagePromise = aroundMessageId
+      ? fetchMessagesAround(topicId, aroundMessageId, 25)
+      : fetchMessages(topicId, 200);
+    const [loadedMessages] = await Promise.all([
+      messagePromise,
+      refreshTopicRuntime(topicId),
+    ]);
+    if (activeTopicIdRef.current === topicId) {
+      setMessages((prev) => mergeSnapshotWithLocal(loadedMessages, prev));
+    }
+  }, [refreshTopicRuntime]);
+
   // WebSocket event handler
   const onEvent = useCallback(
     (event: ServerEvent) => {
       switch (event.type) {
         case 'topic.history':
           if (event.topicId === activeTopicId) {
-            setMessages(event.messages);
+            setMessages((prev) => mergeSnapshotWithLocal(event.messages, prev));
           }
           break;
 
         case 'message.created':
           if (event.topicId === activeTopicId) {
-            setMessages((prev) => {
-              // Avoid duplicates
-              if (prev.some((m) => m.id === event.message.id)) return prev;
-              return [...prev, event.message];
-            });
+            setMessages((prev) => upsertMessage(prev, event.message));
           }
           break;
 
         case 'agent.job.started':
-          updateTopicJobs(event.topicId, (prev) => [
-            ...prev,
-            {
-              jobId: event.jobId,
-              agentName: event.agentName,
-              status: 'running',
-              streamContent: '',
-            },
-          ]);
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.some((job) => job.jobId === event.jobId)
+              ? prev.map((job) =>
+                  job.jobId === event.jobId
+                    ? { ...job, agentName: event.agentName, status: 'running', error: undefined }
+                    : job
+                )
+              : [
+                  ...prev,
+                  {
+                    jobId: event.jobId,
+                    agentName: event.agentName,
+                    status: 'running',
+                    streamContent: '',
+                  },
+                ]
+          );
           break;
 
         case 'message.stream':
@@ -232,10 +346,7 @@ export function App() {
           );
           if (event.message) {
             if (event.topicId === activeTopicId) {
-              setMessages((prev) => {
-                if (prev.some((m) => m.id === event.message.id)) return prev;
-                return [...prev, event.message];
-              });
+              setMessages((prev) => upsertMessage(prev, event.message));
             }
           }
           // Clean up done jobs after animation
@@ -369,17 +480,36 @@ export function App() {
   // Re-send active topic on reconnect
   const prevConnected = useRef(false);
   useEffect(() => {
-    if (connected && !prevConnected.current && activeTopicId) {
-      send({ type: 'presence.active_topic', topicId: activeTopicId });
+    if (connected && !prevConnected.current) {
+      const topicIds = new Set<number>();
+      if (activeTopicId) {
+        topicIds.add(activeTopicId);
+        void refreshTopicSnapshot(activeTopicId, highlightedMessageId ?? undefined).catch(() => {});
+        send({ type: 'presence.active_topic', topicId: activeTopicId });
+      }
+      for (const [topicIdText, jobs] of Object.entries(jobsByTopic)) {
+        if (jobs.length === 0) continue;
+        const topicId = Number(topicIdText);
+        topicIds.add(topicId);
+        if (topicId !== activeTopicId) {
+          void refreshTopicRuntime(topicId).catch(() => {});
+        }
+      }
+      for (const topicId of topicIds) {
+        send(topicId === activeTopicId && highlightedMessageId
+          ? { type: 'topic.join', topicId, aroundMessageId: highlightedMessageId, radius: 25 }
+          : { type: 'topic.join', topicId });
+      }
     }
     prevConnected.current = connected;
-  }, [connected, activeTopicId, send]);
+  }, [connected, activeTopicId, highlightedMessageId, jobsByTopic, refreshTopicRuntime, refreshTopicSnapshot, send]);
 
   // Unsubscribe from topics that have no active jobs and aren't the current topic
   useEffect(() => {
     for (const key of Object.keys(jobsByTopic)) {
       const topicId = Number(key);
-      if (topicId !== activeTopicId && jobsByTopic[topicId].length === 0) {
+      const topicJobs = jobsByTopic[topicId] || [];
+      if (topicId !== activeTopicId && topicJobs.length === 0) {
         send({ type: 'topic.leave', topicId });
         setJobsByTopic((prev) => {
           const next = { ...prev };
@@ -390,13 +520,13 @@ export function App() {
     }
   }, [jobsByTopic, activeTopicId, send]);
 
-  // Join topic via WebSocket
+  // Load the selected topic via HTTP snapshot, then keep it subscribed via WS.
   // We intentionally do NOT send topic.leave so the server keeps delivering
-  // streaming events for topics with in-flight agent jobs. The per-topic
-  // jobsByTopic map preserves job state across switches.
+  // streaming events for topics with in-flight agent jobs.
   const handleSelectTopic = useCallback(
     (topicId: number, aroundMessageId?: number) => {
       setActiveTopicId(topicId);
+      activeTopicIdRef.current = topicId;
       setMessages([]);
       setHighlightedMessageId(aroundMessageId ?? null);
       setSidebarOpen(false);
@@ -404,11 +534,7 @@ export function App() {
         ? { type: 'topic.join', topicId, aroundMessageId, radius: 25 }
         : { type: 'topic.join', topicId });
       send({ type: 'presence.active_topic', topicId });
-      fetchTopicInputRequests(topicId)
-        .then((requests) => {
-          setInputRequestsByTopic((prev) => ({ ...prev, [topicId]: requests }));
-        })
-        .catch(() => {});
+      void refreshTopicSnapshot(topicId, aroundMessageId).catch(() => {});
       // Auto-clear focus if joining outside focused subtree
       setFocusedTopicId((prev) => {
         if (!prev) return null;
@@ -423,7 +549,7 @@ export function App() {
         return focusedIds.has(topicId) ? prev : null;
       });
     },
-    [send, topics]
+    [refreshTopicSnapshot, send, topics]
   );
 
   const handleOpenSearchMessage = useCallback((result: MessageSearchResult) => {
@@ -447,6 +573,13 @@ export function App() {
       setMessages([]);
     }
   }, [activeTopicId]);
+
+  const handleRenameTopic = useCallback(async (topicId: number, currentName: string) => {
+    const newName = prompt('Rename topic:', currentName);
+    if (!newName || newName.trim() === currentName) return;
+    await apiRenameTopic(topicId, newName.trim());
+    fetchTopics().then(setTopics);
+  }, []);
 
   const handleRestoreTopic = useCallback(async (topicId: number) => {
     await apiRestoreTopic(topicId);
@@ -628,8 +761,8 @@ export function App() {
 
           case 'new': {
             echoCommand(text);
-            if (authUser?.role === 'observer') {
-              systemReply('Observers cannot create topics.');
+            if (!can('topics.create')) {
+              systemReply('You are not allowed to create topics.');
               return true;
             }
             const name = parts.slice(1).join(' ');
@@ -653,8 +786,8 @@ export function App() {
             if (!activeTopicId) return false;
             echoCommand(text);
             if (sub === 'new' && parts.slice(2).join(' ')) {
-              if (authUser?.role === 'observer') {
-                systemReply('Observers cannot create topics.');
+              if (!can('topics.create')) {
+                systemReply('You are not allowed to create topics.');
                 return true;
               }
               const childName = parts.slice(2).join(' ');
@@ -737,10 +870,47 @@ export function App() {
       }
 
       if (!activeTopicId) return false;
-      send({ type: 'message.send', topicId: activeTopicId, body: text });
+      if (!can('messages.post')) {
+        systemReply('You are not allowed to post messages.');
+        return true;
+      }
+      const topicId = activeTopicId;
+      const clientMessageId = createClientMessageId();
+      const optimisticMessage: Message = {
+        id: `pending:${clientMessageId}`,
+        topic_id: topicId,
+        author_type: 'user',
+        author_name: authUser?.handle || authUser?.email || 'you',
+        client_message_id: clientMessageId,
+        body: text,
+        created_at: new Date().toISOString(),
+        delivery_status: 'pending',
+      };
+      if (activeTopicIdRef.current === topicId) {
+        setMessages((prev) => [...prev, optimisticMessage]);
+      }
+      void postMessage(topicId, text, undefined, clientMessageId)
+        .then(({ message }) => {
+          if (message && activeTopicIdRef.current === topicId) {
+            setMessages((prev) => upsertMessage(prev, message));
+          }
+          void refreshTopicRuntime(topicId).catch(() => {});
+        })
+        .catch((error: Error) => {
+          if (activeTopicIdRef.current !== topicId) return;
+          setMessages((prev) => updateLocalMessage(
+            prev,
+            clientMessageId,
+            (message) => ({
+              ...message,
+              delivery_status: 'failed',
+              delivery_error: error.message,
+            })
+          ));
+        });
       return true;
     },
-    [activeTopicId, send, agents, handleSelectTopic, authUser, topics, presence]
+    [activeTopicId, send, agents, handleSelectTopic, authUser, topics, presence, refreshTopicRuntime, can]
   );
 
   const handleAnswerInput = useCallback(async (requestId: number, payload: { value: boolean | string | string[]; comment?: string }) => {
@@ -815,7 +985,7 @@ export function App() {
         <ArchiveList
           archivedTopics={archivedTopics}
           onRestore={handleRestoreTopic}
-          userRole={authUser.role}
+          canRestoreTopics={can('topics.restore')}
         />
       );
     }
@@ -847,8 +1017,10 @@ export function App() {
           onSelectTopic={handleSelectTopic}
           onCreateTopic={handleCreateTopic}
           onArchiveTopic={handleArchiveTopic}
+          onRenameTopic={handleRenameTopic}
           onFocusTopic={(id) => setFocusedTopicId(id)}
           onCreateChildTopic={(parentId) => {
+            if (!can('topics.create')) return;
             const name = prompt('Child topic name:');
             if (!name) return;
             createTopic(name, parentId).then((topic) => {
@@ -857,7 +1029,8 @@ export function App() {
             });
           }}
           focusedTopicId={focusedTopicId}
-          userRole={authUser.role}
+          canCreateTopics={can('topics.create')}
+          canManageTopics={can('topics.rename') || can('topics.archive') || can('topics.move')}
         />
       </>
     );
@@ -872,7 +1045,7 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleCollapsed}
         archiveCount={archivedTopics.length}
-        isOwner={authUser.role === 'owner'}
+        canViewAdmin={can('admin.view')}
       />
       <aside
         className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed || activeView === 'settings' ? 'collapsed' : ''} ${resizing ? 'resizing' : ''}`}
@@ -915,7 +1088,7 @@ export function App() {
               </svg>
               {archivedTopics.length > 0 && <span className="drawer-badge">{archivedTopics.length}</span>}
             </button>
-            {authUser.role === 'owner' && (
+            {can('admin.view') && (
               <button
                 className={`drawer-view-btn ${activeView === 'settings' ? 'active' : ''}`}
                 onClick={() => { setSidebarOpen(false); setActiveView('settings'); }}
@@ -963,7 +1136,7 @@ export function App() {
         <div className="user-section">
           <span className="user-handle">{authUser.handle}</span>
           <span className="user-role">{authUser.role}</span>
-          {demoEnabled && authUser.role === 'owner' && (
+          {demoEnabled && authUser.isOwner && (
             <button
               className="admin-btn"
               onClick={() => {
@@ -975,7 +1148,7 @@ export function App() {
               Demo {demoHotkey}
             </button>
           )}
-          {authUser.role === 'owner' && (
+          {can('admin.view') && (
             <button
               className="admin-btn"
               onClick={() => {
@@ -992,7 +1165,7 @@ export function App() {
         <div className={`sidebar-resize-handle ${resizing ? 'dragging' : ''}`} {...handleProps} />
       </aside>
       <main className="main">
-        {activeView === 'settings' && authUser.role === 'owner' ? (
+        {activeView === 'settings' && can('admin.view') ? (
           <AdminPage agents={agents} mode={project?.mode ?? 'private'} />
         ) : activeTopic ? (
           <ChatView
@@ -1009,7 +1182,8 @@ export function App() {
             onAnswerInput={handleAnswerInput}
             onCancelInput={handleCancelInput}
             highlightedMessageId={highlightedMessageId}
-            isOwner={authUser.role === 'owner'}
+            canCancelAnyInputRequest={can('input_requests.cancel.any')}
+            canPromoteArtifacts={can('artifacts.promote')}
             projectPath={project?.path}
           />
         ) : (
@@ -1024,7 +1198,7 @@ export function App() {
             <h2>Select a topic to start</h2>
             <p>Or create a new one with +</p>
             <p>Type <code>/help</code> in any topic to see available commands.</p>
-            {demoEnabled && authUser.role === 'owner' && (
+            {demoEnabled && authUser.isOwner && (
               <p>
                 Demo mode is on. Press {demoHotkey} or click the Demo button to send the prompt sequence to
                 {' '}{demoTopicName}.

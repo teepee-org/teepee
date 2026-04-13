@@ -4,13 +4,13 @@ import * as crypto from 'crypto';
 import {
   getMessages,
   getMessagesAround,
-  insertMessage,
-  getMessageById,
   executeCommand,
+  hasCapability,
 } from 'teepee-core';
 import type { CommandContext } from 'teepee-core';
 import type { ServerContext, ClientState } from './context.js';
 import { authenticateRequest } from './http/utils.js';
+import { submitUserMessage } from './post-message.js';
 
 function broadcastPresence(ctx: ServerContext) {
   const snapshot = ctx.getPresenceSnapshot();
@@ -80,28 +80,17 @@ export function setupWebSocket(server: http.Server, ctx: ServerContext) {
           }
 
           case 'message.send': {
-            if (client.user.role !== 'owner' && client.user.role !== 'collaborator') {
-              ws.send(JSON.stringify({ type: 'error', message: 'Observers cannot send messages' }));
+            if (!hasCapability(ctx.config, client.user.role, 'messages.post')) {
+              ws.send(JSON.stringify({ type: 'error', message: 'You are not allowed to post messages' }));
               break;
             }
-            const email = client.user.email;
-            const handle = client.user.handle || client.user.email;
-            const messageId = insertMessage(ctx.db, event.topicId, 'user', handle, event.body);
-            const userMsg = getMessageById(ctx.db, messageId);
-            if (userMsg) {
-              ctx.broadcast(event.topicId, { type: 'message.created', topicId: event.topicId, message: userMsg });
-            }
-            ctx.orchestrator.handlePostedMessage(
-              event.topicId, messageId, email, handle, event.body
-            ).catch((err: any) => {
-              ctx.broadcast(event.topicId, { type: 'system', topicId: event.topicId, text: `Error: ${err?.message || err}` });
-            });
+            submitUserMessage(ctx, event.topicId, client.user, event.body, event.clientMessageId);
             break;
           }
 
           case 'command': {
             const { command: cmdName, topicId: cmdTopicId, ...cmdParams } = event;
-            const cmdCtx: CommandContext = { db: ctx.db, user: client.user, topicId: cmdTopicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
+            const cmdCtx: CommandContext = { db: ctx.db, config: ctx.config, user: client.user, topicId: cmdTopicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
             const cmdResult = executeCommand(cmdName, cmdCtx, cmdParams);
             if (!cmdResult.ok) {
               ws.send(JSON.stringify({ type: 'error', message: cmdResult.error }));

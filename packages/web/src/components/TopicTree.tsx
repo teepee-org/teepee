@@ -9,10 +9,12 @@ interface Props {
   onSelectTopic: (id: number) => void;
   onCreateTopic: () => void;
   onArchiveTopic: (topicId: number) => void;
+  onRenameTopic?: (topicId: number, currentName: string) => void;
   onFocusTopic?: (topicId: number) => void;
   onCreateChildTopic?: (parentTopicId: number) => void;
   focusedTopicId?: number | null;
-  userRole: string;
+  canCreateTopics: boolean;
+  canManageTopics: boolean;
 }
 
 interface ContextState {
@@ -23,14 +25,12 @@ interface ContextState {
 
 export function TopicTree({
   topics, activeTopicId, onSelectTopic, onCreateTopic, onArchiveTopic,
-  onFocusTopic, onCreateChildTopic, focusedTopicId, userRole,
+  onRenameTopic, onFocusTopic, onCreateChildTopic, focusedTopicId, canCreateTopics, canManageTopics,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextState | null>(null);
   const [focusIndex, setFocusIndex] = useState<number>(-1);
   const longPressTimer = useRef<number | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
-
-  const canEdit = userRole !== 'observer';
 
   const navItems = useMemo(() => topics.map((t) => t.id), [topics]);
 
@@ -121,7 +121,7 @@ export function TopicTree({
     <div className="topic-list" ref={treeRef} tabIndex={0}>
       <div className="topic-list-header">
         <h2>Topics</h2>
-        {canEdit && (
+        {canCreateTopics && (
           <div className="topic-list-actions">
             <button onClick={onCreateTopic} title="New topic">+</button>
           </div>
@@ -130,14 +130,15 @@ export function TopicTree({
       {topics.length === 0 ? (
         <div className="tree-empty-state">
           <p>No topics yet</p>
-          {canEdit && <button className="tree-empty-action" onClick={onCreateTopic}>Create your first topic</button>}
+          {canCreateTopics && <button className="tree-empty-action" onClick={onCreateTopic}>Create your first topic</button>}
         </div>
       ) : (
         <ul>
           {topics.map((topic, i) => {
-            const menuItems: MenuItem[] = canEdit
+            const menuItems: MenuItem[] = canManageTopics
               ? [
-                  ...(onCreateChildTopic ? [{ label: 'New child topic', action: () => onCreateChildTopic(topic.id) }] : []),
+                  ...(onRenameTopic ? [{ label: 'Rename', action: () => onRenameTopic(topic.id, topic.name) }] : []),
+                  ...(canCreateTopics && onCreateChildTopic ? [{ label: 'New child topic', action: () => onCreateChildTopic(topic.id) }] : []),
                   ...(onFocusTopic ? [{ label: 'Focus subtree', action: () => onFocusTopic(topic.id) }] : []),
                   { label: 'Archive', action: () => onArchiveTopic(topic.id) },
                 ]
@@ -155,7 +156,46 @@ export function TopicTree({
                 onTouchEnd={cancelLongPress}
                 onTouchMove={cancelLongPress}
               >
-                <span className="topic-name">{topic.name} <span className="topic-id">#{topic.id}</span></span>
+                <div className="topic-row">
+                  <span className="topic-name">
+                    {topic.name} <span className="topic-id">#{topic.id}</span>
+                  </span>
+                  <span className="topic-meta-icons">
+                    {topic.queued_job_count ? (
+                      <span
+                        className="topic-runtime-indicator topic-runtime-indicator-queued"
+                        title={topic.queued_job_count === 1 ? '1 queued agent' : `${topic.queued_job_count} queued agents`}
+                        aria-label={topic.queued_job_count === 1 ? '1 queued agent' : `${topic.queued_job_count} queued agents`}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M8 3.25a4.75 4.75 0 1 1-3.36 1.39" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+                          <path d="M4.15 2.8v2.65H6.8" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span>{topic.queued_job_count}</span>
+                      </span>
+                    ) : null}
+                    {topic.running_job_count ? (
+                      <span
+                        className="topic-runtime-indicator topic-runtime-indicator-running"
+                        title={topic.running_job_count === 1 ? '1 running agent' : `${topic.running_job_count} running agents`}
+                        aria-label={topic.running_job_count === 1 ? '1 running agent' : `${topic.running_job_count} running agents`}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" strokeWidth="1.25" strokeDasharray="10 4" />
+                        </svg>
+                        <span>{topic.running_job_count}</span>
+                      </span>
+                    ) : null}
+                    {topic.has_local_artifacts && (
+                      <span className="topic-doc-indicator" title="Has local documents" aria-label="Has local documents">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M4 1.5h5.5L13 5v9.5H4z" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+                          <path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                    )}
+                  </span>
+                </div>
               </li>
             );
           })}

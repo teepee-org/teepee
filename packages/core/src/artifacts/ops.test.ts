@@ -163,4 +163,29 @@ describe('executeArtifactOps', () => {
     expect(result.accessState.versionsRead[artifact.id]).toEqual([1, 2]);
     expect(result.accessState.currentVersionsRead[artifact.id]).toBe(2);
   });
+
+  it('allows reading artifacts inherited from parent topics', () => {
+    db.exec(`
+      INSERT INTO topics (id, name, parent_topic_id) VALUES (2, 'child-topic', 1);
+    `);
+    const { artifact } = createDocumentArtifact(db, {
+      topicId: 1,
+      kind: 'spec',
+      title: 'Parent spec',
+      body: 'parent body',
+    });
+
+    const result = executeArtifactOps(db, [2, 1], [
+      { op_id: 'r1', op: 'read-current', artifact_id: artifact.id },
+    ]);
+
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        op_id: 'r1',
+        ok: true,
+        op: 'read-current',
+        body: 'parent body',
+      }),
+    ]);
+  });
 });

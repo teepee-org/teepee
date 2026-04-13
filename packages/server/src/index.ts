@@ -5,9 +5,11 @@ import * as crypto from 'crypto';
 import { WebSocket } from 'ws';
 import {
   loadConfig,
+  migrateConfigFileToV2,
   openDb,
   getMessages,
   expirePendingJobInputRequests,
+  failInterruptedJobs,
   Orchestrator,
   ensureOwner,
   runMigrations,
@@ -36,6 +38,18 @@ export function startServer(
   const bindHost = options.host || '127.0.0.1';
   const idleThresholdMs = options.idleThresholdMs ?? 90_000;
   const idleCheckIntervalMs = options.idleCheckIntervalMs ?? 15_000;
+  const migration = migrateConfigFileToV2(configPath, { write: true });
+  if (migration.migrated) {
+    if (migration.sourceVersion === 1) {
+      console.warn('Legacy config v1 detected.');
+      console.warn('Config migrated automatically to v2.');
+    } else {
+      console.warn('Config normalized automatically to the latest v2 schema.');
+    }
+    if (migration.backupPath) {
+      console.warn(`Backup written to: ${migration.backupPath}`);
+    }
+  }
   const config = loadConfig(configPath);
   const teepeeDir = path.dirname(path.resolve(configPath));
   const basePath = path.dirname(teepeeDir);
@@ -52,6 +66,7 @@ export function startServer(
 
   const db = openDb(dbPath);
   runMigrations(db);
+  failInterruptedJobs(db);
   const ownerEmail = process.env.TEEPEE_OWNER_EMAIL || 'owner@localhost';
   ensureOwner(db, ownerEmail);
   const ownerSecret = crypto.randomBytes(16).toString('hex');
@@ -102,6 +117,9 @@ export function startServer(
     },
     onSystemMessage(topicId, text) {
       broadcast(topicId, { type: 'system', topicId, text });
+    },
+    onRuntimeChanged() {
+      broadcastGlobal({ type: 'topics.changed' });
     },
   };
 
