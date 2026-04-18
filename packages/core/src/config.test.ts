@@ -709,7 +709,7 @@ describe('resolveTimeout', () => {
     expect(resolveTimeout('reviewer', config)).toBe(90_000);
   });
 
-  it('falls back to default 120s', () => {
-    expect(resolveTimeout('quick', config)).toBe(120_000);
+  it('falls back to default 180s when neither agent nor provider sets timeout_seconds', () => {
+    expect(resolveTimeout('quick', config)).toBe(180_000);
   });
 });

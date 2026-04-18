@@ -438,22 +438,26 @@ export const DEFAULT_KILL_GRACE_SECONDS = 5;
 /**
  * Resolve the idle timeout (in milliseconds) for an agent, with the
  * agent → provider → default fallback chain.
+ *
+ * An explicit value of `0` at any level means "disable idle-timeout
+ * enforcement for this agent" and short-circuits the chain. Only a
+ * genuinely missing (`undefined`) value is treated as "not set".
  */
 export function resolveTimeout(
   agentName: string,
   config: TeepeeConfig
 ): number {
   const agent = config.agents[agentName];
-  if (agent?.timeout_seconds) return agent.timeout_seconds * 1000;
+  if (agent?.timeout_seconds !== undefined) return agent.timeout_seconds * 1000;
   const provider = config.providers[agent?.provider];
-  if (provider?.timeout_seconds) return provider.timeout_seconds * 1000;
+  if (provider?.timeout_seconds !== undefined) return provider.timeout_seconds * 1000;
   return DEFAULT_TIMEOUT_SECONDS * 1000;
 }
 
 /**
  * Resolve the SIGTERM→SIGKILL grace window (in milliseconds) for an agent.
- * Only the provider-level setting is meaningful; the agent can override for
- * parity with timeout_seconds.
+ * An explicit `0` means "send SIGKILL immediately"; only `undefined`
+ * triggers the default.
  */
 export function resolveKillGrace(
   agentName: string,

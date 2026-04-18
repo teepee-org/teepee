@@ -94,7 +94,7 @@ describe('runAgent', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('does not stream raw codex json events to onChunk', async () => {
+  it('streams parsed text (not raw json) to onChunk for codex', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-codex-stream-test-'));
     const scriptPath = path.join(tmpDir, 'codex');
 
@@ -119,7 +119,10 @@ describe('runAgent', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.output).toBe('final clean answer');
-    expect(chunks).toEqual([]);
+    // Raw NDJSON must never leak into onChunk — only parsed text.
+    expect(chunks.join('')).not.toMatch(/"type":/);
+    expect(chunks.join('')).not.toContain('thread.started');
+    expect(chunks.join('')).toContain('final clean answer');
 
     process.env.PATH = originalPath;
     fs.rmSync(tmpDir, { recursive: true, force: true });

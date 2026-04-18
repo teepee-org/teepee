@@ -114,7 +114,13 @@ export class ClaudeStreamJsonParser implements StreamParser {
   private buffer = '';
   constructor(private previewLength: number) {}
 
-  feed(chunk: string, _stream: 'stdout' | 'stderr'): StreamEvent[] {
+  feed(chunk: string, stream: 'stdout' | 'stderr'): StreamEvent[] {
+    // Claude stream-json events are emitted on stdout only. Mixing stderr
+    // into the same line buffer can corrupt a pending JSON line (e.g. a
+    // warning appearing mid-chunk) and lose downstream events. Ignore stderr
+    // entirely — a separate parser could handle it if we ever need to surface
+    // provider diagnostics.
+    if (stream !== 'stdout') return [];
     this.buffer += chunk;
     const events: StreamEvent[] = [];
     let newlineIdx = this.buffer.indexOf('\n');
@@ -252,6 +258,10 @@ function extractToolTarget(tool: string, input: Record<string, unknown>): string
 export class CodexParser implements StreamParser {
   private stdoutBuffer = '';
   private stderrBuffer = '';
+  /** True once any `agent_message_delta` has been emitted with its text; we
+   * then suppress the `text` field on the matching `item.completed` event to
+   * avoid duplicating the final message in the live stream body. */
+  private deltaTextEmitted = false;
   constructor(private previewLength: number) {}
 
   feed(chunk: string, stream: 'stdout' | 'stderr'): StreamEvent[] {
@@ -311,7 +321,10 @@ export class CodexParser implements StreamParser {
       }
       if (item.type === 'agent_message_delta' && typeof item.delta === 'string') {
         const preview = summarizePreview(item.delta, this.previewLength);
-        if (preview.length > 0) return { kind: 'text_delta', preview, text: item.delta };
+        if (preview.length > 0) {
+          this.deltaTextEmitted = true;
+          return { kind: 'text_delta', preview, text: item.delta };
+        }
       }
       if (item.type === 'file_change' && typeof item.path === 'string') {
         return { kind: 'tool_use', tool: 'Edit', target: item.path };
@@ -320,7 +333,16 @@ export class CodexParser implements StreamParser {
     if (obj.type === 'item.completed') {
       if (item.type === 'agent_message' && typeof item.text === 'string') {
         const preview = summarizePreview(item.text, this.previewLength);
-        if (preview.length > 0) return { kind: 'text_delta', preview, text: item.text };
+        if (preview.length === 0) return null;
+        // If deltas were already streamed, the live body already contains the
+        // full text. Emit the event with a preview for the activity indicator
+        // but omit `text` so the runner does not re-append the full message.
+        if (this.deltaTextEmitted) {
+          return { kind: 'text_delta', preview };
+        }
+        // No deltas seen — fall through and send the full text so the live
+        // body gets something instead of staying empty until job close.
+        return { kind: 'text_delta', preview, text: item.text };
       }
     }
     return null;

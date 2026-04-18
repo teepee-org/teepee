@@ -135,6 +135,26 @@ describe('ClaudeStreamJsonParser', () => {
     expect(events).toEqual([]);
   });
 
+  it('ignores stderr chunks entirely (they cannot corrupt the NDJSON buffer)', () => {
+    const p = new ClaudeStreamJsonParser(60);
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Hello.' }] },
+    });
+    // Send first half of the JSON line on stdout, a stderr warning, then the
+    // rest on stdout. Without stream separation the buffer would concatenate
+    // the warning mid-line and the JSON would fail to parse.
+    const mid = Math.floor(line.length / 2);
+    p.feed(line.slice(0, mid), 'stdout');
+    expect(p.feed('⚠ rate-limit warning on stderr\n', 'stderr')).toEqual([]);
+    const events = p.feed(line.slice(mid) + '\n', 'stdout');
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('text_delta');
+    if (events[0].kind === 'text_delta') {
+      expect(events[0].text).toBe('Hello.');
+    }
+  });
+
   it('ignores empty text_delta', () => {
     const p = new ClaudeStreamJsonParser(60);
     const events = p.feed(
@@ -181,14 +201,49 @@ describe('CodexParser', () => {
     ]);
   });
 
-  it('emits text_delta from item.completed agent_message', () => {
+  it('emits text_delta with text from item.completed when no deltas were seen', () => {
     const p = new CodexParser(40);
     const line = JSON.stringify({
       type: 'item.completed',
       item: { type: 'agent_message', text: 'Final answer here.' },
     }) + '\n';
     const events = p.feed(line, 'stdout');
-    expect(events[0]?.kind).toBe('text_delta');
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('text_delta');
+    if (events[0].kind === 'text_delta') {
+      // No deltas streamed before the completed, so the completed event
+      // carries the full text for the runner to append to the live body.
+      expect(events[0].text).toBe('Final answer here.');
+    }
+  });
+
+  it('strips text from item.completed when deltas already streamed (no duplication)', () => {
+    const p = new CodexParser(40);
+    const deltaLine =
+      JSON.stringify({
+        type: 'item.added',
+        item: { type: 'agent_message_delta', delta: 'Part A ' },
+      }) + '\n';
+    const completedLine =
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'Part A Part B.' },
+      }) + '\n';
+    const deltaEvents = p.feed(deltaLine, 'stdout');
+    expect(deltaEvents).toHaveLength(1);
+    expect(deltaEvents[0].kind).toBe('text_delta');
+    if (deltaEvents[0].kind === 'text_delta') {
+      expect(deltaEvents[0].text).toBe('Part A ');
+    }
+    const completedEvents = p.feed(completedLine, 'stdout');
+    expect(completedEvents).toHaveLength(1);
+    expect(completedEvents[0].kind).toBe('text_delta');
+    if (completedEvents[0].kind === 'text_delta') {
+      // Preview is still populated for the activity indicator, but `text`
+      // is omitted so the runner does not re-append the full message.
+      expect(completedEvents[0].text).toBeUndefined();
+      expect(completedEvents[0].preview).toContain('Part A Part B');
+    }
   });
 
   it('ignores non-JSON stdout session chrome', () => {
