@@ -877,6 +877,30 @@ body {
   to { visibility: hidden; }
 }
 
+/* Typing-indicator dots in the status label. Each dot fades in/out with a
+   staggered delay so the trio reads as a live, continuously-cycling hint
+   that the agent is still working, even between stream chunks. */
+.typing-dots {
+  display: inline-block;
+  margin-left: 2px;
+  letter-spacing: 1px;
+}
+
+.typing-dots > span {
+  display: inline-block;
+  animation: typing-dot 1.2s ease-in-out infinite;
+  opacity: 0.2;
+}
+
+.typing-dots > span:nth-child(1) { animation-delay: 0s; }
+.typing-dots > span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots > span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-1px); }
+}
+
 .agent-slot-body {
   padding: 12px;
   font-size: 14px;

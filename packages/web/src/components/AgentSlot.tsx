@@ -39,8 +39,8 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
 
   const statusLabel: Record<string, string> = {
     queued: 'queued',
-    running: 'thinking...',
-    streaming: 'streaming...',
+    running: 'thinking',
+    streaming: 'streaming',
     done: 'done',
     failed: 'failed',
   };
@@ -54,6 +54,7 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
   };
 
   const alive = status === 'running' || status === 'streaming' || status === 'queued';
+  const labelAnimated = status === 'running' || status === 'streaming';
 
   return (
     <div className={`agent-slot ${status}`}>
@@ -64,6 +65,13 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
         </span>
         <span className={`agent-slot-status status-${status}`}>
           {statusIcon[status]} {statusLabel[status]}
+          {labelAnimated && (
+            <span className="typing-dots" aria-hidden="true">
+              <span>.</span>
+              <span>.</span>
+              <span>.</span>
+            </span>
+          )}
         </span>
       </div>
       {activityLine && (status === 'running' || status === 'streaming') && (
