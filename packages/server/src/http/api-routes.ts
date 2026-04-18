@@ -1070,10 +1070,23 @@ export function handleApiRoute(
           const wsRoot = accessibleFileRoots.find((r) => r.id === 'workspace') || accessibleFileRoots[0];
           if (wsRoot) listFsDir(wsRoot.id, '.');
         } else {
-          // Path format: "rootId:subpath" or "rootId:"
+          // Accepted path formats:
+          //   "rootId:subpath" or "rootId:"    (explicit colon form)
+          //   "rootId/subpath" or "rootId/"    (slash form, as built by client after entering a root directory)
+          //   "rootId"                         (bare root id)
+          let rootId = '';
+          let subPath = '';
           const colonIdx = pathParam.indexOf(':');
-          const rootId = colonIdx >= 0 ? pathParam.slice(0, colonIdx) : pathParam;
-          const subPath = colonIdx >= 0 ? pathParam.slice(colonIdx + 1) : '';
+          if (colonIdx >= 0) {
+            rootId = pathParam.slice(0, colonIdx);
+            subPath = pathParam.slice(colonIdx + 1);
+          } else {
+            const slashIdx = pathParam.indexOf('/');
+            rootId = slashIdx >= 0 ? pathParam.slice(0, slashIdx) : pathParam;
+            subPath = slashIdx >= 0 ? pathParam.slice(slashIdx + 1) : '';
+          }
+          // Normalize trailing slashes in subPath; empty becomes "."
+          subPath = subPath.replace(/\/+$/, '') || '.';
           if (accessibleFileRootIds.has(rootId)) {
             listFsDir(rootId, subPath);
           }
