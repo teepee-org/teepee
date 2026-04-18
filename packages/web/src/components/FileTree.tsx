@@ -172,8 +172,16 @@ function RootNode({
   onContextMenu,
   tree,
 }: RootNodeProps) {
+  const rootSelection: FileSelection = { rootId, rootKind, path: '', name: rootId, type: 'root' };
   const handleSelect = () => {
-    onSelect({ rootId, rootKind, path: '', name: rootId, type: 'root' });
+    onSelect(rootSelection);
+  };
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (onContextMenu) {
+      e.preventDefault();
+      onSelect(rootSelection);
+      onContextMenu(rootSelection, e);
+    }
   };
   return (
     <div className="fs-tree-root-node" role="treeitem" aria-expanded={expanded}>
@@ -183,6 +191,7 @@ function RootNode({
           handleSelect();
           onToggle();
         }}
+        onContextMenu={handleContextMenu}
         title={rootPath}
       >
         <span className="fs-tree-chevron">{expanded ? '▾' : '▸'}</span>

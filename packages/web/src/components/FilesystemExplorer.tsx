@@ -28,15 +28,14 @@ export function FilesystemExplorer({ selection, onSelect, onNotify }: Props) {
   }, [menu]);
 
   const handleContextMenu = (sel: FileSelection, event: React.MouseEvent) => {
-    if (sel.type !== 'file') return;
     setMenu({ x: event.clientX, y: event.clientY, selection: sel });
   };
 
   const copyReference = async (sel: FileSelection) => {
-    const uri = canonicalUri(sel);
+    const link = markdownLink(sel);
     try {
-      await navigator.clipboard.writeText(uri);
-      onNotify(`Copied ${uri} to clipboard — paste in any message.`, 'success');
+      await navigator.clipboard.writeText(link);
+      onNotify(`Copied ${link} to clipboard — paste in any message.`, 'success');
     } catch {
       onNotify('Copy failed — your browser may have blocked clipboard access.', 'error');
     }
@@ -44,8 +43,8 @@ export function FilesystemExplorer({ selection, onSelect, onNotify }: Props) {
   };
 
   const copyAgentPrompt = async (sel: FileSelection, agent: string) => {
-    const uri = canonicalUri(sel);
-    const text = `@${agent} please review ${uri} and suggest changes.`;
+    const link = markdownLink(sel);
+    const text = `@${agent} please review ${link} and suggest changes.`;
     try {
       await navigator.clipboard.writeText(text);
       onNotify(`Copied @${agent} prompt to clipboard — paste in any topic.`, 'success');
@@ -105,4 +104,19 @@ export function canonicalUri(selection: FileSelection): string {
     return `teepee:/workspace/${selection.path}${suffix}`;
   }
   return `teepee:/fs/${selection.rootId}/${selection.path}${suffix}`;
+}
+
+/**
+ * Build a markdown link for a selection, matching the format used by
+ * the compose-box file picker (`[basename](canonicalUri)`).
+ */
+export function markdownLink(selection: FileSelection): string {
+  const uri = canonicalUri(selection);
+  if (selection.type === 'root') {
+    return `[${selection.rootId}/](${uri})`;
+  }
+  const label = selection.type === 'directory'
+    ? `${selection.name}/`
+    : selection.name;
+  return `[${label}](${uri})`;
 }
