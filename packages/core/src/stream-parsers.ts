@@ -234,16 +234,23 @@ function extractToolTarget(tool: string, input: Record<string, unknown>): string
 /**
  * Codex `exec` parser.
  *
- * Codex prints the agent session on stderr with lines like:
- *   $ rg --files .
- *   … (command output)
- *   $ cat packages/core/src/foo.ts
+ * Teepee runs `codex exec` with `--json` added automatically (see
+ * prepareCommandParts in command.ts). Codex then emits newline-delimited
+ * JSON on stdout with shapes like:
  *
- * And the final assistant message on stdout. We emit `shell` events for
- * stderr lines beginning with `$ ` and `text_delta` previews for stdout
- * bursts.
+ *   { "type": "thread.started", "thread_id": "…" }
+ *   { "type": "item.added", "item": { "type": "command_execution", "command": "rg --files .", … } }
+ *   { "type": "item.completed", "item": { "type": "command_execution", "exit_code": 0, … } }
+ *   { "type": "item.added", "item": { "type": "agent_message_delta", "delta": "Part of the answer " } }
+ *   { "type": "item.completed", "item": { "type": "agent_message", "text": "Full final answer." } }
+ *
+ * We parse each line, emit `shell` events for command_execution, and
+ * `text_delta` events for agent_message / agent_message_delta items.
+ * stderr is parsed only for `$ cmd` shell-prompt lines (legacy non-json
+ * mode, plus a safety net).
  */
 export class CodexParser implements StreamParser {
+  private stdoutBuffer = '';
   private stderrBuffer = '';
   constructor(private previewLength: number) {}
 
@@ -271,9 +278,52 @@ export class CodexParser implements StreamParser {
   }
 
   private feedStdout(chunk: string): StreamEvent[] {
-    const preview = summarizePreview(chunk, this.previewLength);
-    if (preview.length === 0) return [];
-    return [{ kind: 'text_delta', preview }];
+    this.stdoutBuffer += chunk;
+    const events: StreamEvent[] = [];
+    let newlineIdx = this.stdoutBuffer.indexOf('\n');
+    while (newlineIdx >= 0) {
+      const rawLine = this.stdoutBuffer.slice(0, newlineIdx);
+      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIdx + 1);
+      const line = rawLine.trim();
+      if (line.length > 0 && line.startsWith('{')) {
+        const parsed = this.parseJsonLine(line);
+        if (parsed) events.push(parsed);
+      }
+      // Non-JSON lines in stdout are not surfaced — they are usually session
+      // chrome that codex prints before the JSON stream starts.
+      newlineIdx = this.stdoutBuffer.indexOf('\n');
+    }
+    return events;
+  }
+
+  private parseJsonLine(line: string): StreamEvent | null {
+    let obj: any;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    const item = obj?.item;
+    if (!item || typeof item !== 'object') return null;
+    if (obj.type === 'item.added' || obj.type === 'item.updated') {
+      if (item.type === 'command_execution' && typeof item.command === 'string') {
+        return { kind: 'shell', command: summarizePreview(item.command, 120) };
+      }
+      if (item.type === 'agent_message_delta' && typeof item.delta === 'string') {
+        const preview = summarizePreview(item.delta, this.previewLength);
+        if (preview.length > 0) return { kind: 'text_delta', preview, text: item.delta };
+      }
+      if (item.type === 'file_change' && typeof item.path === 'string') {
+        return { kind: 'tool_use', tool: 'Edit', target: item.path };
+      }
+    }
+    if (obj.type === 'item.completed') {
+      if (item.type === 'agent_message' && typeof item.text === 'string') {
+        const preview = summarizePreview(item.text, this.previewLength);
+        if (preview.length > 0) return { kind: 'text_delta', preview, text: item.text };
+      }
+    }
+    return null;
   }
 }
 

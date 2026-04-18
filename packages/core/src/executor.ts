@@ -336,19 +336,19 @@ export function runAgent(
     };
 
     // ── Stream parsing (activity events + structured text routing) ──
-    // Always build the parser: for stream-json providers we also use it to
-    // extract the *actual* assistant text out of the JSON event stream and
-    // forward only that to the UI (instead of the raw JSON which would look
-    // like noise in the chat bubble). For onActivity-only consumers the
-    // parser is still the right source of events.
-    const wantsParser = Boolean(opts.onActivity) || isClaudeStreamJsonCmd;
+    // Always build the parser when the provider emits structured (JSON-line)
+    // output: we use it both to extract activity events for the UI indicator
+    // and to lift the assistant text out of the raw JSON so the chat bubble
+    // renders prose instead of the event log.
+    const providerIsStructured = isCodexExecJson || isClaudeStreamJsonCmd;
+    const wantsParser = Boolean(opts.onActivity) || providerIsStructured;
     const parser = wantsParser ? parserForCommand(opts.command) : null;
 
     const handleChunk = (chunk: string, stream: 'stdout' | 'stderr') => {
       armIdleTimer(); // any chunk resets the idle timer
       if (!parser) return;
       for (const event of parser.feed(chunk, stream)) {
-        if (isClaudeStreamJsonCmd && event.kind === 'text_delta' && event.text) {
+        if (providerIsStructured && event.kind === 'text_delta' && event.text) {
           // Forward the parsed text (not the raw JSON chunk) to the UI.
           try {
             opts.onChunk?.(event.text);

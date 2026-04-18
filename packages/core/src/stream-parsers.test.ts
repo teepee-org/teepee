@@ -155,11 +155,60 @@ describe('CodexParser', () => {
     expect(events).toEqual([{ kind: 'shell', command: 'rg --files .' }]);
   });
 
-  it('emits text_delta on stdout bursts with preview', () => {
+  it('emits text_delta with full text from agent_message_delta NDJSON item', () => {
     const p = new CodexParser(40);
-    const events = p.feed('The project is a small TypeScript library', 'stdout');
+    const line = JSON.stringify({
+      type: 'item.added',
+      item: { type: 'agent_message_delta', delta: 'The project is a small library' },
+    }) + '\n';
+    const events = p.feed(line, 'stdout');
     expect(events).toHaveLength(1);
     expect(events[0].kind).toBe('text_delta');
+    if (events[0].kind === 'text_delta') {
+      expect(events[0].text).toBe('The project is a small library');
+      expect(events[0].preview).toContain('The project');
+    }
+  });
+
+  it('emits shell from command_execution NDJSON item', () => {
+    const p = new CodexParser(60);
+    const line = JSON.stringify({
+      type: 'item.added',
+      item: { type: 'command_execution', command: 'rg --files packages/core' },
+    }) + '\n';
+    expect(p.feed(line, 'stdout')).toEqual([
+      { kind: 'shell', command: 'rg --files packages/core' },
+    ]);
+  });
+
+  it('emits text_delta from item.completed agent_message', () => {
+    const p = new CodexParser(40);
+    const line = JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: 'Final answer here.' },
+    }) + '\n';
+    const events = p.feed(line, 'stdout');
+    expect(events[0]?.kind).toBe('text_delta');
+  });
+
+  it('ignores non-JSON stdout session chrome', () => {
+    const p = new CodexParser(60);
+    expect(p.feed('[2026-04-18T12:00:00] session started\n', 'stdout')).toEqual([]);
+    expect(p.feed('not-json\n', 'stdout')).toEqual([]);
+  });
+
+  it('buffers partial stdout JSON lines across chunks', () => {
+    const p = new CodexParser(40);
+    const fullLine = JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: 'Done.' },
+    }) + '\n';
+    const mid = Math.floor(fullLine.length / 2);
+    const first = p.feed(fullLine.slice(0, mid), 'stdout');
+    expect(first).toEqual([]);
+    const second = p.feed(fullLine.slice(mid), 'stdout');
+    expect(second).toHaveLength(1);
+    expect(second[0].kind).toBe('text_delta');
   });
 
   it('buffers partial stderr lines across chunks', () => {
