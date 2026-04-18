@@ -1,4 +1,4 @@
-export type ActivityView = 'topics' | 'search' | 'archive' | 'settings';
+export type ActivityView = 'topics' | 'files' | 'search' | 'archive' | 'settings';
 
 interface Props {
   activeView: ActivityView;
@@ -30,6 +30,12 @@ const SearchIcon = () => (
   </svg>
 );
 
+const FilesIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 4a1 1 0 011-1h4l2 2h6a1 1 0 011 1v9a2 2 0 01-2 2H4a1 1 0 01-1-1V4z" />
+  </svg>
+);
+
 const SettingsIcon = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="3" />
@@ -39,6 +45,7 @@ const SettingsIcon = () => (
 
 const views: { id: ActivityView; Icon: () => React.JSX.Element; label: string }[] = [
   { id: 'topics', Icon: TopicsIcon, label: 'Topics' },
+  { id: 'files', Icon: FilesIcon, label: 'Files' },
   { id: 'search', Icon: SearchIcon, label: 'Search' },
   { id: 'archive', Icon: ArchiveIcon, label: 'Archive' },
   { id: 'settings', Icon: SettingsIcon, label: 'Settings' },

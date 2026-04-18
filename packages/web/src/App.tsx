@@ -7,6 +7,9 @@ import { ChatView } from './components/ChatView';
 import { InvitePage } from './components/InvitePage';
 import { AdminPage } from './components/AdminPage';
 import { SearchPanel } from './components/SearchPanel';
+import { FilesystemExplorer } from './components/FilesystemExplorer';
+import { FilePreview } from './components/FilePreview';
+import type { FileSelection } from './components/FileTree';
 import { useResizable } from './hooks/useResizable';
 import { useWebSocket } from './useWebSocket';
 import {
@@ -139,7 +142,19 @@ export function App() {
   const [activeView, setActiveView] = useState<ActivityView>(() => {
     return (localStorage.getItem('teepee-active-view') as ActivityView) || 'topics';
   });
+  const [fileSelection, setFileSelection] = useState<FileSelection | null>(null);
+  const [toast, setToast] = useState<{ id: number; message: string; variant: 'success' | 'error' } | null>(null);
   const activeTopicIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  const notify = useCallback((message: string, variant: 'success' | 'error') => {
+    setToast({ id: Date.now(), message, variant });
+  }, []);
 
   const { width: sidebarWidth, collapsed: sidebarCollapsed, resizing, handleProps, toggleCollapsed } = useResizable({
     initialWidth: 260,
@@ -1034,6 +1049,16 @@ export function App() {
       );
     }
 
+    if (activeView === 'files') {
+      return (
+        <FilesystemExplorer
+          selection={fileSelection}
+          onSelect={setFileSelection}
+          onNotify={notify}
+        />
+      );
+    }
+
     // Default: topics view
     const focusTopic = focusedTopicId ? topics.find((t) => t.id === focusedTopicId) : null;
     return (
@@ -1200,6 +1225,26 @@ export function App() {
       <main className="main">
         {activeView === 'settings' && can('admin.view') ? (
           <AdminPage agents={agents} mode={project?.mode ?? 'private'} />
+        ) : activeView === 'files' ? (
+          fileSelection ? (
+            <FilePreview
+              selection={fileSelection}
+              projectPath={project?.path}
+              onOpenReference={(href) => {
+                // Delegate to existing reference viewer mechanics by returning to topics
+                setActiveView('topics');
+                setTimeout(() => {
+                  navigator.clipboard?.writeText(href).catch(() => {});
+                  notify(`Reference URI copied: ${href}`, 'success');
+                }, 0);
+              }}
+            />
+          ) : (
+            <div className="empty-state">
+              <h2>Files</h2>
+              <p>Select a file from the tree to preview its content.</p>
+            </div>
+          )
         ) : activeTopic ? (
           <ChatView
             topicId={activeTopic.id}
@@ -1240,6 +1285,14 @@ export function App() {
           </div>
         )}
       </main>
+      {toast && (
+        <div className={`toast toast-${toast.variant}`} role="status" aria-live="polite">
+          <span className="toast-message">{toast.message}</span>
+          <button className="toast-dismiss" onClick={() => setToast(null)} aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }

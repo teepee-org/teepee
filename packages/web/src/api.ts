@@ -369,3 +369,43 @@ export function workspaceDownloadUrl(
 ): string {
   return fileDownloadUrl('workspace', filePath, disposition);
 }
+
+export interface FilesystemRootInfo {
+  id: string;
+  kind: 'workspace' | 'host';
+  path: string;
+}
+
+export async function fetchFsRoots(): Promise<{ roots: FilesystemRootInfo[] }> {
+  const res = await fetch(`${BASE}/fs/roots`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to fetch roots' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface FsDirEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+}
+
+export interface FsEntriesResponse {
+  root: { id: string; kind: 'workspace' | 'host'; path: string };
+  path: string;
+  entries: FsDirEntry[];
+}
+
+export async function fetchFsEntries(
+  rootId: string,
+  relativePath: string = '.'
+): Promise<FsEntriesResponse> {
+  const params = new URLSearchParams({ root: rootId, path: relativePath });
+  const res = await fetch(`${BASE}/fs/entries?${params}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to list directory' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
