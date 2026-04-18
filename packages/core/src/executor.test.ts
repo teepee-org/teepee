@@ -295,10 +295,87 @@ describe('buildContext', () => {
     ]);
 
     expect(context).toContain('[artifacts/v2]');
-    expect(context).toContain('Artifact content access is lazy');
-    expect(context).toContain('For any existing document edit, use this workflow: read-current on the target artifact');
+    expect(context).toContain('Do not inspect source code, databases, or other files in the project to verify these formats');
+    expect(context).toContain('Artifact-ops root key is "operations" (not "ops"). Artifacts root key is "documents".');
+    expect(context).toContain('"op_id": "read-head", "op": "read-current", "artifact_id": 42');
+    expect(context).toContain('"op": "update", "artifact_id": 42, "base_version": "current"');
+    expect(context).toContain('"op": "create", "kind": "spec"');
+    expect(context).toContain('"op": "edit"');
+    expect(context).toContain('"edits": [');
+    expect(context).toContain('For any existing document change, use this workflow: read-current on the target artifact');
     expect(context).toContain('Prefer base_version: "current" after read-current');
-    expect(context).toContain("Use 'update' when history is only reference material. Use 'rewrite-from-version' when the requested content must be materially derived from a historical version");
+    expect(context).toContain("STRONGLY PREFER 'edit' for small targeted changes");
+
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('shrinks topic history when building artifact-focused context', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-context-artifact-focus-test-'));
+    const dbPath = path.join(tmpDir, 'db.sqlite');
+    const db = openDb(dbPath);
+    const topicId = createTopic(db, 'test');
+    insertMessage(db, topicId, 'user', 'owner', 'intro');
+    insertMessage(db, topicId, 'agent', 'architect', 'A'.repeat(3000));
+    const triggerMessageId = insertMessage(
+      db,
+      topicId,
+      'user',
+      'owner',
+      '@architect aggiorna l\'artifact "Doc" aggiungendo solo un link'
+    );
+
+    const config = {
+      version: 1 as const,
+      mode: 'private' as const,
+      teepee: {
+        name: 'test',
+        language: 'it',
+        demo: {
+          enabled: false,
+          topic_name: 'hn-live-demo',
+          hotkey: 'F1',
+          delay_ms: 1200,
+        },
+      },
+      server: {
+        trust_proxy: false,
+        cors_allowed_origins: [],
+        auth_rate_limit_window_seconds: 60,
+        auth_rate_limit_max_requests: 20,
+      },
+      providers: {
+        claude: { command: 'echo' },
+      },
+      agents: {
+        architect: { provider: 'claude' },
+      },
+      limits: {
+        max_agents_per_message: 5,
+        max_jobs_per_user_per_minute: 10,
+        max_chain_depth: 2,
+        max_total_jobs_per_chain: 10,
+      },
+      roles: { owner: { architect: 'readwrite' as const }, collaborator: { architect: 'readwrite' as const }, observer: {} },
+      security: {
+        sandbox: { runner: 'bubblewrap' as const, empty_home: true, private_tmp: true, forward_env: [] },
+      },
+    };
+
+    const context = buildContext(
+      db,
+      'architect',
+      topicId,
+      triggerMessageId,
+      'it',
+      config,
+      tmpDir,
+      [{ id: 10, kind: 'spec', title: 'Doc', current_version: 1 }]
+    );
+
+    expect(context).toContain('[… truncated ');
+    expect(context).not.toContain('A'.repeat(2000));
+    expect(context).toContain('@architect aggiorna l\'artifact "Doc" aggiungendo solo un link');
 
     db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });

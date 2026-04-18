@@ -70,6 +70,97 @@ describe('validateManifest', () => {
     expect(manifest!.documents[0].op).toBe('rewrite-from-version');
   });
 
+  it('accepts valid edit manifest with a single find/replace', () => {
+    const raw = {
+      documents: [
+        {
+          op: 'edit',
+          artifact_id: 12,
+          base_version: 'current',
+          edits: [{ find: 'foo', replace: 'bar' }],
+        },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(errors).toEqual([]);
+    expect(manifest!.documents.length).toBe(1);
+    expect(manifest!.documents[0].op).toBe('edit');
+  });
+
+  it('accepts edit manifest with replace_all true', () => {
+    const raw = {
+      documents: [
+        {
+          op: 'edit',
+          artifact_id: 12,
+          base_version: 'current',
+          edits: [{ find: 'foo', replace: 'bar', replace_all: true }],
+        },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(errors).toEqual([]);
+    const entry = manifest!.documents[0];
+    expect(entry.op).toBe('edit');
+    if (entry.op === 'edit') {
+      expect(entry.edits[0].replace_all).toBe(true);
+    }
+  });
+
+  it('rejects edit manifest with empty edits array', () => {
+    const raw = {
+      documents: [
+        { op: 'edit', artifact_id: 12, base_version: 'current', edits: [] },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(manifest).toBeNull();
+    expect(errors[0].message).toContain('at least one');
+  });
+
+  it('rejects edit manifest with empty find', () => {
+    const raw = {
+      documents: [
+        {
+          op: 'edit',
+          artifact_id: 12,
+          base_version: 'current',
+          edits: [{ find: '', replace: 'bar' }],
+        },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(manifest).toBeNull();
+    expect(errors[0].message).toContain('non-empty string');
+  });
+
+  it('rejects edit manifest with non-boolean replace_all', () => {
+    const raw = {
+      documents: [
+        {
+          op: 'edit',
+          artifact_id: 12,
+          base_version: 'current',
+          edits: [{ find: 'foo', replace: 'bar', replace_all: 'yes' }],
+        },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(manifest).toBeNull();
+    expect(errors[0].message).toContain('replace_all');
+  });
+
+  it('rejects edit manifest with missing required fields', () => {
+    const raw = {
+      documents: [
+        { op: 'edit', artifact_id: 12 },
+      ],
+    };
+    const { manifest, errors } = validateManifest(raw, outputDir);
+    expect(manifest).toBeNull();
+    expect(errors.some((e) => e.message.includes('base_version'))).toBe(true);
+  });
+
   it('rejects non-object manifest', () => {
     const { manifest, errors } = validateManifest('bad', outputDir);
     expect(manifest).toBeNull();

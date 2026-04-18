@@ -4,6 +4,7 @@ import * as path from 'path';
 export const VALID_ARTIFACT_KINDS = new Set(['plan', 'spec', 'adr', 'report', 'review']);
 const MAX_FILE_COUNT = 20;
 const MAX_MARKDOWN_SIZE = 512 * 1024; // 512 KB
+const MAX_EDITS_PER_ENTRY = 20;
 
 export interface ManifestCreateEntry {
   op: 'create';
@@ -19,6 +20,19 @@ export interface ManifestUpdateEntry {
   artifact_id: number;
   base_version: ManifestBaseVersion;
   path: string;
+}
+
+export interface ArtifactEdit {
+  find: string;
+  replace: string;
+  replace_all?: boolean;
+}
+
+export interface ManifestEditEntry {
+  op: 'edit';
+  artifact_id: number;
+  base_version: ManifestBaseVersion;
+  edits: ArtifactEdit[];
 }
 
 export interface ManifestRewriteFromVersionEntry {
@@ -39,6 +53,7 @@ export interface ManifestRestoreEntry {
 export type ManifestEntry =
   | ManifestCreateEntry
   | ManifestUpdateEntry
+  | ManifestEditEntry
   | ManifestRewriteFromVersionEntry
   | ManifestRestoreEntry;
 
@@ -93,13 +108,14 @@ export function validateManifest(
 
     const d = doc as Record<string, unknown>;
 
-    if (d.op !== 'create' && d.op !== 'update' && d.op !== 'rewrite-from-version' && d.op !== 'restore') {
-      errors.push({ message: `Invalid op '${d.op}', must be 'create', 'update', 'rewrite-from-version', or 'restore'`, entry: i });
+    if (d.op !== 'create' && d.op !== 'update' && d.op !== 'edit' && d.op !== 'rewrite-from-version' && d.op !== 'restore') {
+      errors.push({ message: `Invalid op '${d.op}', must be 'create', 'update', 'edit', 'rewrite-from-version', or 'restore'`, entry: i });
       continue;
     }
 
     const VALID_CREATE_KEYS = new Set(['op', 'kind', 'title', 'path']);
     const VALID_UPDATE_KEYS = new Set(['op', 'artifact_id', 'base_version', 'path']);
+    const VALID_EDIT_KEYS = new Set(['op', 'artifact_id', 'base_version', 'edits']);
     const VALID_REWRITE_KEYS = new Set(['op', 'artifact_id', 'base_version', 'source_version', 'path']);
     const VALID_RESTORE_KEYS = new Set(['op', 'artifact_id', 'base_version', 'restore_version']);
     const allowedKeys =
@@ -107,9 +123,11 @@ export function validateManifest(
         ? VALID_CREATE_KEYS
         : d.op === 'update'
           ? VALID_UPDATE_KEYS
-          : d.op === 'rewrite-from-version'
-            ? VALID_REWRITE_KEYS
-            : VALID_RESTORE_KEYS;
+          : d.op === 'edit'
+            ? VALID_EDIT_KEYS
+            : d.op === 'rewrite-from-version'
+              ? VALID_REWRITE_KEYS
+              : VALID_RESTORE_KEYS;
     const extraKeys = Object.keys(d).filter((k) => !allowedKeys.has(k));
     if (extraKeys.length > 0) {
       errors.push({ message: `Unknown keys in ${d.op} entry: ${extraKeys.join(', ')}`, entry: i });
@@ -168,6 +186,74 @@ export function validateManifest(
         continue;
       }
       validatedEntries.push({ op: 'update', artifact_id: d.artifact_id, base_version: d.base_version, path: d.path });
+    } else if (d.op === 'edit') {
+      if (typeof d.artifact_id !== 'number' || !Number.isInteger(d.artifact_id)) {
+        errors.push({ message: "Missing or invalid 'artifact_id'", entry: i });
+        continue;
+      }
+      if (!isBaseVersionRef(d.base_version)) {
+        errors.push({ message: "Missing or invalid 'base_version'", entry: i });
+        continue;
+      }
+      if (!Array.isArray(d.edits)) {
+        errors.push({ message: "Missing or invalid 'edits' (must be an array)", entry: i });
+        continue;
+      }
+      if (d.edits.length === 0) {
+        errors.push({ message: "'edits' must contain at least one edit", entry: i });
+        continue;
+      }
+      if (d.edits.length > MAX_EDITS_PER_ENTRY) {
+        errors.push({ message: `'edits' exceeds max count (${MAX_EDITS_PER_ENTRY})`, entry: i });
+        continue;
+      }
+      const VALID_EDIT_ITEM_KEYS = new Set(['find', 'replace', 'replace_all']);
+      const validatedEdits: ArtifactEdit[] = [];
+      let editsInvalid = false;
+      for (let j = 0; j < d.edits.length; j++) {
+        const rawEdit = d.edits[j];
+        if (typeof rawEdit !== 'object' || rawEdit === null || Array.isArray(rawEdit)) {
+          errors.push({ message: `Edit entry ${j} must be an object`, entry: i });
+          editsInvalid = true;
+          break;
+        }
+        const e = rawEdit as Record<string, unknown>;
+        const extraEditKeys = Object.keys(e).filter((k) => !VALID_EDIT_ITEM_KEYS.has(k));
+        if (extraEditKeys.length > 0) {
+          errors.push({ message: `Unknown keys in edit ${j}: ${extraEditKeys.join(', ')}`, entry: i });
+          editsInvalid = true;
+          break;
+        }
+        if (typeof e.find !== 'string' || e.find.length === 0) {
+          errors.push({ message: `Edit ${j}: 'find' must be a non-empty string`, entry: i });
+          editsInvalid = true;
+          break;
+        }
+        if (typeof e.replace !== 'string') {
+          errors.push({ message: `Edit ${j}: 'replace' must be a string`, entry: i });
+          editsInvalid = true;
+          break;
+        }
+        if (e.replace_all !== undefined && typeof e.replace_all !== 'boolean') {
+          errors.push({ message: `Edit ${j}: 'replace_all' must be a boolean when provided`, entry: i });
+          editsInvalid = true;
+          break;
+        }
+        validatedEdits.push({
+          find: e.find,
+          replace: e.replace,
+          ...(e.replace_all === true ? { replace_all: true } : {}),
+        });
+      }
+      if (editsInvalid) {
+        continue;
+      }
+      validatedEntries.push({
+        op: 'edit',
+        artifact_id: d.artifact_id,
+        base_version: d.base_version,
+        edits: validatedEdits,
+      });
     } else {
       if (typeof d.artifact_id !== 'number' || !Number.isInteger(d.artifact_id)) {
         errors.push({ message: "Missing or invalid 'artifact_id'", entry: i });

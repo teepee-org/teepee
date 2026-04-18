@@ -3,6 +3,7 @@ import {
   readManifestFile,
   validateManifest,
   readArtifactFile,
+  type ArtifactEdit,
   type ArtifactManifest,
   type ManifestBaseVersion,
   type ManifestValidationError,
@@ -26,6 +27,7 @@ export type IngestErrorCode =
   | 'manifest_parse'
   | 'manifest_validation'
   | 'artifact_file'
+  | 'artifact_edit'
   | 'artifact_precondition'
   | 'artifact_conflict'
   | 'artifact_import';
@@ -54,6 +56,27 @@ export interface IngestResult {
   errors: string[];
   errorDetails: IngestErrorDetail[];
   skipped: boolean;
+}
+
+export function formatIngestSummary(
+  imported: IngestResult['imported']
+): string | null {
+  if (imported.length === 0) return null;
+  const lines: string[] = [];
+  for (const item of imported) {
+    const label =
+      item.op === 'create'
+        ? 'created'
+        : item.op === 'restore'
+          ? 'restored'
+          : item.op === 'rewrite-from-version'
+            ? 'rewritten'
+            : 'updated';
+    lines.push(
+      `📄 artifact "${item.artifact.title}" → v${item.version.version} (${label})`
+    );
+  }
+  return lines.join('\n');
 }
 
 export interface IngestOptions {
@@ -112,7 +135,7 @@ export function prepareArtifactIngest(
 
   const preparedDocs: PreparedArtifactDoc[] = [];
   for (const doc of manifest.documents) {
-    if (doc.op === 'restore') {
+    if (doc.op === 'restore' || doc.op === 'edit') {
       preparedDocs.push({ doc });
       continue;
     }
@@ -141,12 +164,76 @@ export function prepareArtifactIngest(
     }
   }
 
+  if (result.errorDetails.length > 0) {
+    result.preparedDocs = preparedDocs;
+    result.skipped = true;
+    return result;
+  }
+
+  for (const preparedDoc of preparedDocs) {
+    if (preparedDoc.doc.op !== 'edit') continue;
+    const current = getCurrentArtifactVersion(db, preparedDoc.doc.artifact_id);
+    if (!current) {
+      pushIngestError(result, {
+        code: 'artifact_precondition',
+        message: `Failed to import artifacts: Artifact ${preparedDoc.doc.artifact_id} has no current version`,
+        recoverable: true,
+      });
+      continue;
+    }
+    const applied = applyArtifactEdits(current.body, preparedDoc.doc.edits);
+    if ('error' in applied) {
+      pushIngestError(result, {
+        code: 'artifact_edit',
+        message: `Failed to import artifacts: Artifact ${preparedDoc.doc.artifact_id} edit ${applied.editIndex}: ${applied.error}`,
+        recoverable: true,
+      });
+      continue;
+    }
+    preparedDoc.body = applied.body;
+  }
+
   result.preparedDocs = preparedDocs;
   if (result.errorDetails.length > 0) {
     result.skipped = true;
   }
 
   return result;
+}
+
+export function applyArtifactEdits(
+  body: string,
+  edits: ArtifactEdit[]
+): { body: string } | { error: string; editIndex: number } {
+  let current = body;
+  for (let i = 0; i < edits.length; i++) {
+    const { find, replace, replace_all } = edits[i];
+    const matches = countOccurrences(current, find);
+    if (matches === 0) {
+      return { error: `'find' string not found in artifact body`, editIndex: i };
+    }
+    if (matches > 1 && !replace_all) {
+      return {
+        error: `'find' matches ${matches} places; set replace_all: true or use a more specific 'find'`,
+        editIndex: i,
+      };
+    }
+    current = replace_all ? current.split(find).join(replace) : current.replace(find, replace);
+  }
+  return { body: current };
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let index = 0;
+  while (true) {
+    const found = haystack.indexOf(needle, index);
+    if (found === -1) break;
+    count++;
+    index = found + needle.length;
+  }
+  return count;
 }
 
 export function commitPreparedArtifactIngest(
@@ -183,16 +270,19 @@ export function commitPreparedArtifactIngest(
           });
           linkMessageArtifact(db, messageId, artifact.id, version.id, 'created');
           rows.push({ artifact, version, op: 'create' });
-        } else if (doc.op === 'update') {
+        } else if (doc.op === 'update' || doc.op === 'edit') {
           const resolvedBaseVersion = resolveBaseVersion(opts, doc.artifact_id, doc.base_version);
           if ('error' in resolvedBaseVersion) {
             throw new Error(resolvedBaseVersion.error);
+          }
+          if (body === undefined) {
+            throw new Error(`Internal: prepared body missing for artifact ${doc.artifact_id}`);
           }
           const { artifact, version } = updateDocumentArtifact(db, {
             artifactId: doc.artifact_id,
             expectedTopicId: opts.topicId,
             baseVersion: resolvedBaseVersion.value,
-            body: body!,
+            body,
             createdByAgent: opts.agentName,
             createdByUserEmail: opts.userEmail,
             createdByJobId: opts.jobId,

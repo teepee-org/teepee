@@ -171,15 +171,15 @@ export function validateArtifactOps(
     }
 
     const op = item as Record<string, unknown>;
-    if (typeof op.op_id !== 'string' || op.op_id.trim().length === 0) {
-      errors.push({ message: "Missing or invalid 'op_id'", entry: i });
+    const normalizedOpId =
+      typeof op.op_id === 'string' && op.op_id.trim().length > 0
+        ? op.op_id.trim()
+        : `auto-${i + 1}`;
+    if (opIds.has(normalizedOpId)) {
+      errors.push({ message: `Duplicate op_id '${normalizedOpId}'`, entry: i });
       continue;
     }
-    if (opIds.has(op.op_id)) {
-      errors.push({ message: `Duplicate op_id '${op.op_id}'`, entry: i });
-      continue;
-    }
-    opIds.add(op.op_id);
+    opIds.add(normalizedOpId);
 
     if (op.op === 'read-current') {
       const allowedKeys = new Set(['op_id', 'op', 'artifact_id']);
@@ -193,7 +193,7 @@ export function validateArtifactOps(
         continue;
       }
       validated.push({
-        op_id: op.op_id.trim(),
+        op_id: normalizedOpId,
         op: 'read-current',
         artifact_id: op.artifact_id,
       });
@@ -216,7 +216,7 @@ export function validateArtifactOps(
         continue;
       }
       validated.push({
-        op_id: op.op_id.trim(),
+        op_id: normalizedOpId,
         op: 'read-version',
         artifact_id: op.artifact_id,
         version: op.version,
@@ -252,7 +252,7 @@ export function validateArtifactOps(
         continue;
       }
       validated.push({
-        op_id: op.op_id.trim(),
+        op_id: normalizedOpId,
         op: 'read-diff',
         artifact_id: op.artifact_id,
         from_version: op.from_version,

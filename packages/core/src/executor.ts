@@ -5,7 +5,7 @@ import { getRecentMessages } from './db.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
-import { prepareCommandParts, isCodexExecCommand } from './command.js';
+import { prepareCommandParts, isCodexExecCommand, checkSandboxCommandAvailability, buildSandboxCommandMountPlan } from './command.js';
 
 export interface JobResult {
   output: string;
@@ -50,7 +50,8 @@ export function buildContext(
   userInputResults?: string
 ): string {
   const prompt = resolvePrompt(agentName, config.agents[agentName], basePath);
-  const messages = getRecentMessages(db, topicId, 20);
+  const artifactFocusedMode = topicArtifacts !== undefined;
+  const messages = getRecentMessages(db, topicId, artifactFocusedMode ? 12 : 20);
   const trigger = messages.find((m) => m.id === triggerMessageId);
 
   const lines: string[] = ['[teepee/v1]', '', '[system]'];
@@ -75,12 +76,55 @@ export function buildContext(
 
   if (topicArtifacts && topicArtifacts.length >= 0) {
     lines.push('[artifacts/v2]');
-    lines.push('You may create or update Markdown document artifacts by writing artifacts.json and files under $TEEPEE_OUTPUT_DIR.');
-    lines.push('Artifact content access is lazy: request document reads by writing artifact-ops.json with read-current, read-version, or read-diff operations.');
-    lines.push('Do not emit update, rewrite-from-version, or restore operations unless you first read the current head version of that artifact in this run.');
-    lines.push('For any existing document edit, use this workflow: read-current on the target artifact, optionally read-version/read-diff for history, then write artifacts.json using base_version from read-current.');
+    lines.push('You may create or update Markdown document artifacts by writing JSON files under $TEEPEE_OUTPUT_DIR.');
+    lines.push('The examples and field lists below are the complete and authoritative specification of this protocol. Do not inspect source code, databases, or other files in the project to verify these formats — follow the shapes shown here exactly.');
+    lines.push('Valid artifact kinds: plan, spec, adr, report, review.');
+    lines.push('Markdown body content always goes in a file under $TEEPEE_OUTPUT_DIR/files/, referenced by the "path" field. Bodies are full documents, never diffs.');
+    lines.push('');
+    lines.push('Example — READ the current version of artifact 42 (write $TEEPEE_OUTPUT_DIR/artifact-ops.json):');
+    lines.push('{');
+    lines.push('  "operations": [');
+    lines.push('    { "op_id": "read-head", "op": "read-current", "artifact_id": 42 }');
+    lines.push('  ]');
+    lines.push('}');
+    lines.push('Teepee will then re-invoke you with the body under [artifact-op-results].');
+    lines.push('');
+    lines.push('Example — EDIT artifact 42 with small targeted changes (write $TEEPEE_OUTPUT_DIR/artifacts.json, NO file needed):');
+    lines.push('{');
+    lines.push('  "documents": [');
+    lines.push('    {');
+    lines.push('      "op": "edit",');
+    lines.push('      "artifact_id": 42,');
+    lines.push('      "base_version": "current",');
+    lines.push('      "edits": [');
+    lines.push('        { "find": "## Riferimenti\\n", "replace": "## Riferimenti\\n- [Karpathy gist](https://gist.github.com/...)\\n" }');
+    lines.push('      ]');
+    lines.push('    }');
+    lines.push('  ]');
+    lines.push('}');
+    lines.push('Each edit requires "find" (unique substring of the current body) and "replace". Add "replace_all": true if "find" occurs multiple times intentionally. Edits apply sequentially; each edit operates on the result of the previous.');
+    lines.push('');
+    lines.push('Example — UPDATE artifact 42 by rewriting the full body (write $TEEPEE_OUTPUT_DIR/artifacts.json AND $TEEPEE_OUTPUT_DIR/files/42-next.md):');
+    lines.push('{');
+    lines.push('  "documents": [');
+    lines.push('    { "op": "update", "artifact_id": 42, "base_version": "current", "path": "files/42-next.md" }');
+    lines.push('  ]');
+    lines.push('}');
+    lines.push('');
+    lines.push('Example — CREATE a new artifact (write $TEEPEE_OUTPUT_DIR/artifacts.json AND $TEEPEE_OUTPUT_DIR/files/my-doc.md):');
+    lines.push('{');
+    lines.push('  "documents": [');
+    lines.push('    { "op": "create", "kind": "spec", "title": "My New Doc", "path": "files/my-doc.md" }');
+    lines.push('  ]');
+    lines.push('}');
+    lines.push('');
+    lines.push('Artifact-ops root key is "operations" (not "ops"). Artifacts root key is "documents".');
+    lines.push('Read operations: read-current {artifact_id}; read-version {artifact_id, version}; read-diff {artifact_id, from_version, to_version, format?}. Version refs accept an integer or "current".');
+    lines.push('Write operations: create {kind, title, path}; update {artifact_id, base_version, path}; edit {artifact_id, base_version, edits[{find, replace, replace_all?}]}; rewrite-from-version {artifact_id, base_version, source_version, path}; restore {artifact_id, base_version, restore_version}.');
+    lines.push('Do not emit update, edit, rewrite-from-version, or restore operations unless you first read the current head version of that artifact in this run.');
+    lines.push('For any existing document change, use this workflow: read-current on the target artifact, optionally read-version/read-diff for history, then write artifacts.json using base_version from read-current.');
     lines.push('Prefer base_version: "current" after read-current; it is safer than copying numeric versions by hand and still requires the read-current precondition.');
-    lines.push("Use 'update' when history is only reference material. Use 'rewrite-from-version' when the requested content must be materially derived from a historical version; that requires both read-current of the head and read-version of source_version in the same run. Use 'restore' only to recreate an older version as the new head.");
+    lines.push("STRONGLY PREFER 'edit' for small targeted changes (adding/removing a line, link, section, paragraph) — it is dramatically cheaper and faster than rewriting the whole body. Use 'update' only when the change is substantial (rewriting large sections). Use 'rewrite-from-version' when the requested content must be materially derived from a historical version; that requires both read-current of the head and read-version of source_version in the same run. Use 'restore' only to recreate an older version as the new head.");
     if (topicArtifacts.length > 0) {
       lines.push('Existing documents:');
       for (const a of topicArtifacts) {
@@ -121,7 +165,12 @@ export function buildContext(
 
   lines.push('[messages]');
   for (const msg of messages) {
-    lines.push(`${msg.author_name}> ${msg.body}`);
+    lines.push(
+      `${msg.author_name}> ${formatContextMessageBody(
+        msg.body,
+        artifactFocusedMode && msg.id !== triggerMessageId
+      )}`
+    );
   }
   lines.push('');
 
@@ -131,6 +180,18 @@ export function buildContext(
   }
 
   return lines.join('\n');
+}
+
+const ARTIFACT_CONTEXT_MESSAGE_LIMIT = 900;
+
+function formatContextMessageBody(body: string, truncateForArtifactFocus: boolean): string {
+  if (!truncateForArtifactFocus || body.length <= ARTIFACT_CONTEXT_MESSAGE_LIMIT) {
+    return body;
+  }
+
+  const kept = body.slice(0, ARTIFACT_CONTEXT_MESSAGE_LIMIT).trimEnd();
+  const omitted = body.length - kept.length;
+  return `${kept}\n[… truncated ${omitted} chars of earlier topic history …]`;
 }
 
 export interface RunAgentOptions {
@@ -175,6 +236,19 @@ export function runAgent(
     let proc;
     const useSandbox = opts.executionMode === 'sandbox';
     if (useSandbox && opts.sandboxRunner && opts.sandboxOptions) {
+      if (opts.sandboxRunner.name === 'bubblewrap') {
+        const sandboxCheck = checkSandboxCommandAvailability(opts.command);
+        const mountPlan = buildSandboxCommandMountPlan(opts.command);
+        if (!sandboxCheck.ok && !mountPlan) {
+          resolve({
+            output: '',
+            exitCode: 1,
+            timedOut: false,
+            error: `${sandboxCheck.error}. Install it in /usr/local/bin or /usr/bin, or use profile 'trusted' if host execution is intended.`,
+          });
+          return;
+        }
+      }
       proc = opts.sandboxRunner.spawn(parts[0], parts.slice(1), opts.sandboxOptions);
     } else {
       const hostEnv = { ...process.env };

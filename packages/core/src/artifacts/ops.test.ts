@@ -53,6 +53,21 @@ describe('validateArtifactOps', () => {
     expect(ops).toBeNull();
     expect(errors[0].message).toContain('Duplicate op_id');
   });
+
+  it('accepts legacy operations without op_id by auto-generating one', () => {
+    const { ops, errors } = validateArtifactOps({
+      operations: [
+        { op: 'read-current', artifact_id: 1 },
+        { op: 'read-version', artifact_id: 1, version: 1 },
+      ],
+    });
+
+    expect(errors).toEqual([]);
+    expect(ops).toEqual([
+      { op_id: 'auto-1', op: 'read-current', artifact_id: 1 },
+      { op_id: 'auto-2', op: 'read-version', artifact_id: 1, version: 1 },
+    ]);
+  });
 });
 
 describe('readArtifactOpsFile', () => {
