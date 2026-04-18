@@ -434,7 +434,12 @@ export function handleApiRoute(
     if (!requireCapability('messages.post', 'You are not allowed to post messages')) return true;
     readBody(req).then((body) => {
       try {
-        const { text, clientMessageId } = JSON.parse(body);
+        const payload = JSON.parse(body);
+        const { text, clientMessageId } = payload;
+        if (typeof text !== 'string' || text.trim().length === 0) {
+          json({ error: "Field 'text' is required and must be a non-empty string" }, 400);
+          return;
+        }
         const topicId = parseInt(url.pathname.split('/')[3]);
         const result = submitUserMessage(ctx, topicId, currentUser, text, clientMessageId);
         json(result, 201);

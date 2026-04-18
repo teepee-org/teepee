@@ -98,6 +98,7 @@ function isLinuxSandboxVisiblePath(commandPath: string | null): boolean {
 interface StarterConfigResult {
   template: string;
   detectedProviders: string[];
+  skippedLocalProviders: string[];
 }
 
 function buildStarterConfig(projectName: string): StarterConfigResult {
@@ -170,19 +171,20 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('  #   provider: codex');
   }
 
-  if (process.platform === 'linux') {
-    const skippedSandboxLocal = [
-      claudePath && !hasClaude ? `claude at ${claudePath}` : null,
-      codexPath && !hasCodex ? `codex at ${codexPath}` : null,
-      ollamaPath && !hasOllama ? `ollama at ${ollamaPath}` : null,
-    ].filter(Boolean) as string[];
-    if (skippedSandboxLocal.length > 0) {
-      providerLines.push('  #');
-      providerLines.push('  # Note: these CLIs were found on the host but skipped for sandboxed auto-config because');
-      providerLines.push('  # Linux bubblewrap only sees /usr/local/bin, /usr/bin, /bin, and /sbin by default:');
-      for (const item of skippedSandboxLocal) {
-        providerLines.push(`  # - ${item}`);
-      }
+  const skippedLocalProviders: string[] =
+    process.platform === 'linux'
+      ? ([
+          claudePath && !hasClaude ? `claude at ${claudePath}` : null,
+          codexPath && !hasCodex ? `codex at ${codexPath}` : null,
+          ollamaPath && !hasOllama ? `ollama at ${ollamaPath}` : null,
+        ].filter(Boolean) as string[])
+      : [];
+  if (skippedLocalProviders.length > 0) {
+    providerLines.push('  #');
+    providerLines.push('  # Note: these CLIs were found on the host but skipped for sandboxed auto-config because');
+    providerLines.push('  # Linux bubblewrap only sees /usr/local/bin, /usr/bin, /bin, and /sbin by default:');
+    for (const item of skippedLocalProviders) {
+      providerLines.push(`  # - ${item}`);
     }
   }
 
@@ -248,7 +250,7 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     '',
   ].join('\n');
 
-  return { template, detectedProviders };
+  return { template, detectedProviders, skippedLocalProviders };
 }
 
 function printConfigMigrateUsage() {
@@ -460,11 +462,22 @@ switch (command) {
     ensureDir();
 
     if (!fs.existsSync(configPath)) {
-      const { template, detectedProviders } = buildStarterConfig(path.basename(process.cwd()));
+      const { template, detectedProviders, skippedLocalProviders } = buildStarterConfig(path.basename(process.cwd()));
       fs.writeFileSync(configPath, template);
       console.log('Created .teepee/config.yaml.');
       if (detectedProviders.length > 0) {
         console.log(`Detected agent CLIs: ${detectedProviders.join(', ')}`);
+      } else if (skippedLocalProviders.length > 0) {
+        console.log('');
+        console.log('Detected these agent CLIs on the host, but they are installed outside');
+        console.log('the sandbox-visible directories (/usr/local/bin, /usr/bin, /bin, /sbin)');
+        console.log('so they were commented out in the generated config:');
+        for (const item of skippedLocalProviders) {
+          console.log(`  - ${item}`);
+        }
+        console.log('');
+        console.log('Open .teepee/config.yaml and uncomment the ones you want to use.');
+        console.log('Teepee will mount their paths into the sandbox automatically.');
       } else {
         console.log('No supported agent CLI was detected in PATH.');
         console.log('Install Claude Code, Codex, or Ollama, or edit the config manually.');
@@ -477,7 +490,47 @@ switch (command) {
       break;
     }
 
-    const { server } = startServer(configPath, port, { host });
+    let server: ReturnType<typeof startServer>['server'];
+    try {
+      ({ server } = startServer(configPath, port, { host }));
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (msg.includes('at least one provider is required')) {
+        console.error('');
+        console.error('Teepee cannot start: no providers are configured.');
+        console.error('Edit .teepee/config.yaml and uncomment at least one provider under `providers:`.');
+        console.error('');
+        process.exit(1);
+      }
+      if (msg.includes('can only bind to a loopback host')) {
+        console.error('');
+        console.error(msg);
+        console.error('');
+        process.exit(1);
+      }
+      console.error(msg);
+      process.exit(1);
+    }
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error('');
+        console.error(`Port ${port} is already in use.`);
+        console.error(`  Try: teepee start --port ${port + 1}`);
+        console.error(`  Or stop the process using port ${port}.`);
+        console.error('');
+        process.exit(1);
+      }
+      if (err.code === 'EACCES') {
+        console.error('');
+        console.error(`Permission denied binding port ${port} on ${host}.`);
+        console.error(`  Ports below 1024 usually require elevated privileges.`);
+        console.error('');
+        process.exit(1);
+      }
+      console.error(`Server error: ${err.message}`);
+      process.exit(1);
+    });
 
     // Save PID
     fs.writeFileSync(pidFile, String(process.pid));

@@ -75,7 +75,11 @@ npm install -g teepee-cli
 teepee start
 ```
 
-**2. Open the owner link**
+**2. Configure providers (if needed)**
+
+Teepee auto-detects `claude`, `codex`, and `ollama` in your PATH. On Linux, CLIs installed outside the sandbox-visible directories (`/usr/local/bin`, `/usr/bin`, `/bin`, `/sbin`) — for example in `~/.local/bin` or under `nvm` — are detected, commented out in the generated config, and reported in the terminal. Open `.teepee/config.yaml`, uncomment the providers you want, and run `npx teepee-cli start` again. Teepee will mount the provider paths into the sandbox automatically.
+
+**3. Open the owner link**
 
 Teepee prints an owner login URL to the terminal. Open it to access the workspace.
 
@@ -110,13 +114,17 @@ If the provider supports editing and shell actions, agents can modify files in t
 - **Hierarchical topics** — Topics can contain child topics, rendered with slight indentation and moved with simple slash commands. Use `/topic new <name>` to create a child under the current topic.
 - **Live presence** — See who is online and which topic each person is in. The sidebar shows a compact presence panel, and `/who` gives the full list.
 - **Focus mode** — Use `/focus` to narrow the sidebar to the current topic's subtree. `/unfocus` restores the full tree.
+- **Filesystem Explorer** — A sidebar **Files** tab with a lazy tree over all configured filesystem roots, typed preview (Markdown, syntax-highlighted code, images, PDFs), and a right-click context menu that copies markdown-link references and ready-made agent-review prompts to the clipboard.
+- **Versioned artifacts** — Long-form documents (specs, RFCs, reports, reviews) are stored as versioned artifacts with an `edit` op that applies small targeted `find`/`replace` changes server-side — typical edits are seconds instead of full-body rewrites.
+- **Compose-box file picker** — Type `|` in a message to open a unified picker across filesystem roots and topic hierarchy; selecting a file inserts a markdown link.
+- **Live system messages** — Artifact commits, permission events, and decision records appear in the topic transcript in real time, not only after reload.
 - **Works on the real project** — Agents run in the project working directory, so they can read files, make changes, and keep the workflow attached to the codebase itself.
 - **Specialized roles** — Split work across `@coder`, `@reviewer`, `@architect`, `@devops`, or your own custom agents with per-agent prompts.
 - **Any CLI agent** — Works with Claude, Codex, Ollama, or any command that reads stdin and writes stdout.
 - **Realtime streaming** — Agent output streams token-by-token via WebSocket.
 - **Self-hosted** — Runs on your machine. Your code, your API keys, your control.
 - **Markdown native** — All messages are Markdown with syntax-highlighted code blocks, tables, and copy buttons.
-- **Web UI** — Clean dark-theme interface with topics, agent slots, and `@` autocomplete.
+- **Web UI** — Clean dark-theme interface with topics, files tab, agent slots, and `@` autocomplete.
 - **Auth built in** — Owner login via secret link. Invite users with magic links. Role-based permissions (owner/collaborator/observer). Deny-by-default agent tagging.
 
 ## Releases
@@ -143,10 +151,10 @@ reviewer> Found a bug. @coder please fix the null check
 
 ## Configuration
 
-Teepee reads its project config from `.teepee/config.yaml`.
+Teepee reads its project config from `.teepee/config.yaml`. The current schema is v2. Legacy v1 configs are automatically migrated on first start, and a `.config.v2.bak.yaml` backup is written next to the live file.
 
 ```yaml
-version: 1
+version: 2
 mode: private
 
 teepee:
@@ -158,6 +166,12 @@ server:
   cors_allowed_origins: []          # optional extra origins for cross-origin API access
   auth_rate_limit_window_seconds: 60
   auth_rate_limit_max_requests: 20
+
+filesystem:
+  roots:
+    - id: workspace
+      kind: workspace
+      path: .
 
 providers:
   claude:
@@ -181,15 +195,26 @@ agents:
 
 roles:
   owner:
-    coder: readwrite
-    reviewer: readwrite
-    architect: readwrite
-    devops: trusted
+    superuser: true                   # owner bypasses the capability list
+    agents:
+      coder: readwrite
+      reviewer: readwrite
+      architect: readwrite
+      devops: trusted
   collaborator:
-    coder: readwrite
-    reviewer: readonly
-    architect: draft
-  observer: {}
+    capabilities:
+      - files.workspace.access
+      - topics.create
+      - topics.rename
+      - messages.post
+    agents:
+      coder: readwrite
+      reviewer: readonly
+      architect: draft
+  observer:
+    capabilities:
+      - files.workspace.access
+    agents: {}
 
 limits:
   max_agents_per_message: 5
@@ -325,20 +350,30 @@ Provider commands run according to the **role access matrix**:
 ```yaml
 roles:
   owner:
-    coder: trusted
-    reviewer: readwrite
+    superuser: true
+    agents:
+      coder: trusted
+      reviewer: readwrite
   collaborator:
-    coder: readwrite
-    reviewer: readonly
-  observer: {}
+    capabilities:
+      - files.workspace.access
+      - messages.post
+    agents:
+      coder: readwrite
+      reviewer: readonly
+  observer:
+    capabilities:
+      - files.workspace.access
+    agents: {}
 ```
 
 The mapping is:
 
 ```text
-roles[role][agent] = effective access profile
+roles[role].agents[agent] = effective access profile
 missing agent mapping = deny
 unknown profile = invalid config
+superuser: true on a role bypasses the capability list
 ```
 
 Built-in profiles:
@@ -357,7 +392,7 @@ Agents define which provider and prompt to use. Roles define whether an agent ca
   - `propose_only` — same as `none` (reserved for future approval workflows).
   - `delegate_with_origin_policy` — mentions trigger the target agent, subject to the original requester's role matrix.
 
-The target agent never inherits the source agent's privileges. Chained calls are resolved again as `roles[origin_user_role][target_agent]`.
+The target agent never inherits the source agent's privileges. Chained calls are resolved again as `roles[origin_user_role].agents[target_agent]`.
 
 **Sandbox backends:**
 
@@ -395,14 +430,23 @@ agents:
 
 roles:
   owner:
-    architect: readwrite
-    coder: trusted
-    reviewer: readwrite
+    superuser: true
+    agents:
+      architect: readwrite
+      coder: trusted
+      reviewer: readwrite
   collaborator:
-    architect: draft
-    coder: readwrite
-    reviewer: readonly
-  observer: {}
+    capabilities:
+      - files.workspace.access
+      - messages.post
+    agents:
+      architect: draft
+      coder: readwrite
+      reviewer: readonly
+  observer:
+    capabilities:
+      - files.workspace.access
+    agents: {}
 ```
 
 When sandbox mode uses the **container** backend, the provider must define `providers.<name>.sandbox.image`. Teepee does not fall back to a generic image or silently reuse host-only runtime assumptions. If the configured sandbox runner is unavailable, or the selected provider has no container runtime definition, the run fails closed.
