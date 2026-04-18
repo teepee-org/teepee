@@ -11,7 +11,17 @@ export interface ProviderSandboxConfig {
 
 export interface ProviderConfig {
   command: string;
+  /**
+   * Idle timeout in seconds. The runner kills the provider process if no
+   * stdout/stderr chunk has been received for this many seconds. Defaults to
+   * 180 when neither agent nor provider sets a value.
+   */
   timeout_seconds?: number;
+  /**
+   * Grace window in seconds between SIGTERM and SIGKILL when the idle timeout
+   * fires. Defaults to 5.
+   */
+  kill_grace_seconds?: number;
   /** Sandbox runtime config for container-based execution. */
   sandbox?: ProviderSandboxConfig;
 }
@@ -272,6 +282,7 @@ export function loadConfig(configPath: string): TeepeeConfig {
     const providerEntry: ProviderConfig = {
       command: p.command,
       timeout_seconds: p.timeout_seconds,
+      kill_grace_seconds: p.kill_grace_seconds,
     };
     if (p.sandbox) {
       if (!p.sandbox.image || typeof p.sandbox.image !== 'string') {
@@ -419,6 +430,15 @@ export function resolvePrompt(
   return `You are ${agentName}, an AI assistant.`;
 }
 
+/** Default idle timeout in seconds when neither agent nor provider overrides it. */
+export const DEFAULT_TIMEOUT_SECONDS = 180;
+/** Default SIGTERM→SIGKILL grace window in seconds when a provider is killed on idle timeout. */
+export const DEFAULT_KILL_GRACE_SECONDS = 5;
+
+/**
+ * Resolve the idle timeout (in milliseconds) for an agent, with the
+ * agent → provider → default fallback chain.
+ */
 export function resolveTimeout(
   agentName: string,
   config: TeepeeConfig
@@ -427,7 +447,24 @@ export function resolveTimeout(
   if (agent?.timeout_seconds) return agent.timeout_seconds * 1000;
   const provider = config.providers[agent?.provider];
   if (provider?.timeout_seconds) return provider.timeout_seconds * 1000;
-  return 120_000;
+  return DEFAULT_TIMEOUT_SECONDS * 1000;
+}
+
+/**
+ * Resolve the SIGTERM→SIGKILL grace window (in milliseconds) for an agent.
+ * Only the provider-level setting is meaningful; the agent can override for
+ * parity with timeout_seconds.
+ */
+export function resolveKillGrace(
+  agentName: string,
+  config: TeepeeConfig
+): number {
+  const agent = config.agents[agentName];
+  const provider = config.providers[agent?.provider];
+  if (provider?.kill_grace_seconds !== undefined) {
+    return provider.kill_grace_seconds * 1000;
+  }
+  return DEFAULT_KILL_GRACE_SECONDS * 1000;
 }
 
 export function isOwnerRole(role: string): boolean {

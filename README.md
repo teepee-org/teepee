@@ -175,8 +175,9 @@ filesystem:
 
 providers:
   claude:
-    command: "claude -p --permission-mode acceptEdits"
-    timeout_seconds: 120
+    command: "claude -p --permission-mode acceptEdits --output-format stream-json --verbose"
+    timeout_seconds: 180        # idle timeout; the provider is killed if no stdout/stderr chunk arrives for this long (default 180)
+    kill_grace_seconds: 5       # SIGTERM → SIGKILL grace window on idle timeout (default 5)
   codex:
     command: "codex exec"
   local:

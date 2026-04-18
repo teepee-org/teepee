@@ -122,7 +122,7 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
   if (hasClaude) {
     detectedProviders.push('claude');
     providerLines.push('  claude:');
-    providerLines.push('    command: "claude -p --permission-mode acceptEdits"');
+    providerLines.push('    command: "claude -p --permission-mode acceptEdits --output-format stream-json --verbose"');
   }
 
   if (hasCodex) {
@@ -156,7 +156,7 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     }
   } else {
     providerLines.push('  # claude:');
-    providerLines.push('  #   command: "claude -p --permission-mode acceptEdits"');
+    providerLines.push('  #   command: "claude -p --permission-mode acceptEdits --output-format stream-json --verbose"');
     providerLines.push('  # codex:');
     providerLines.push('  #   command: "codex exec"');
     providerLines.push('  # ollama:');

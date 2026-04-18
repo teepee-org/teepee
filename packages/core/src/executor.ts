@@ -6,6 +6,7 @@ import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
 import { prepareCommandParts, isCodexExecCommand, checkSandboxCommandAvailability, buildSandboxCommandMountPlan } from './command.js';
+import { parserForCommand, type StreamEvent } from './stream-parsers.js';
 
 export interface JobResult {
   output: string;
@@ -197,12 +198,24 @@ function formatContextMessageBody(body: string, truncateForArtifactFocus: boolea
 export interface RunAgentOptions {
   command: string;
   context: string;
+  /**
+   * Idle timeout in milliseconds. If no stdout/stderr chunk is received for
+   * this many ms, the runner sends SIGTERM, waits killGraceMs, and then
+   * SIGKILL. A falsy value disables idle-timeout enforcement for this run.
+   */
   timeoutMs?: number;
+  /**
+   * Grace window in ms between SIGTERM and SIGKILL when the idle timeout fires.
+   * Defaults to 5000.
+   */
+  killGraceMs?: number;
   cwd: string;
   executionMode?: ExecutionMode;
   sandboxRunner?: SandboxRunner;
   sandboxOptions?: SandboxOptions;
   onChunk?: (chunk: string) => void;
+  /** Called for each StreamEvent extracted from provider output. */
+  onActivity?: (event: StreamEvent) => void;
   outputDir?: string;
 }
 
@@ -269,8 +282,75 @@ export function runAgent(
     const resolveOnce = (result: JobResult) => {
       if (settled) return;
       settled = true;
+      clearIdleTimer();
+      clearKillTimer();
       resolve(result);
     };
+
+    // ── Idle timer (SIGTERM → grace → SIGKILL on no-output window) ──
+    const idleBudgetMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
+    const killGraceMs = opts.killGraceMs && opts.killGraceMs > 0 ? opts.killGraceMs : 5000;
+
+    let idleTimer: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+    let timedOut = false;
+
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
+    const onIdle = () => {
+      idleTimer = null;
+      if (settled) return;
+      timedOut = true;
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        /* already dead */
+      }
+      killTimer = setTimeout(() => {
+        killTimer = null;
+        if (settled) return;
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* already dead */
+        }
+      }, killGraceMs);
+    };
+
+    const armIdleTimer = () => {
+      if (idleBudgetMs <= 0) return;
+      clearIdleTimer();
+      idleTimer = setTimeout(onIdle, idleBudgetMs);
+    };
+
+    // ── Stream parsing (activity events) ──
+    const parser = opts.onActivity ? parserForCommand(opts.command) : null;
+
+    const handleChunk = (chunk: string, stream: 'stdout' | 'stderr') => {
+      armIdleTimer(); // any chunk resets the idle timer
+      if (parser && opts.onActivity) {
+        for (const event of parser.feed(chunk, stream)) {
+          try {
+            opts.onActivity(event);
+          } catch {
+            // UI consumer issues must not break the run.
+          }
+        }
+      }
+    };
+
+    armIdleTimer();
 
     proc.stdout!.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -278,10 +358,13 @@ export function runAgent(
       if (!isCodexExecJson) {
         opts.onChunk?.(chunk);
       }
+      handleChunk(chunk, 'stdout');
     });
 
     proc.stderr!.on('data', (data: Buffer) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      handleChunk(chunk, 'stderr');
     });
 
     proc.stdin!.on('error', () => {
@@ -290,6 +373,18 @@ export function runAgent(
 
     proc.on('close', (code, signal) => {
       const normalizedOutput = isCodexExecJson ? extractCodexFinalMessage(output) : output.trim();
+      if (timedOut) {
+        const seconds = Math.round(idleBudgetMs / 1000);
+        resolveOnce({
+          output: normalizedOutput,
+          exitCode: code ?? 1,
+          timedOut: true,
+          stderr: stderr.trim(),
+          signal,
+          error: `Idle timeout: no output for ${seconds}s`,
+        });
+        return;
+      }
       resolveOnce({
         output: normalizedOutput,
         exitCode: code ?? 1,

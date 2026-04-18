@@ -13,3 +13,4 @@ export * from './artifacts/index.js';
 export * from './references.js';
 export * from './filesystem.js';
 export * from './user-input/index.js';
+export * from './stream-parsers.js';

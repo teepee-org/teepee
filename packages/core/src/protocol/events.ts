@@ -47,6 +47,19 @@ export interface AgentJobRoundStartedEvent {
   phase: string;
 }
 
+export type AgentActivityEvent =
+  | { kind: 'tool_use'; tool: string; target?: string }
+  | { kind: 'shell'; command: string }
+  | { kind: 'text_delta'; preview: string };
+
+export interface AgentJobActivityEvent {
+  type: 'agent.job.activity';
+  topicId: number;
+  jobId: number;
+  agentName: string;
+  event: AgentActivityEvent;
+}
+
 export interface AgentJobCompletedEvent {
   type: 'agent.job.completed';
   topicId: number;
@@ -61,6 +74,8 @@ export interface AgentJobFailedEvent {
   jobId: number;
   agentName: string;
   error: string;
+  /** True when the failure was triggered by the idle-timeout policy. */
+  timedOut?: boolean;
 }
 
 export interface AgentJobWaitingInputEvent {
@@ -159,6 +174,7 @@ export type ServerEvent =
   | AgentJobStartedEvent
   | AgentJobRetryingEvent
   | AgentJobRoundStartedEvent
+  | AgentJobActivityEvent
   | AgentJobWaitingInputEvent
   | AgentJobResumedEvent
   | AgentJobCompletedEvent

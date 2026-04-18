@@ -3,7 +3,8 @@ import * as path from 'path';
 import * as os from 'os';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import type { TeepeeConfig, ExecutionMode, AgentAccessProfile, UserRole } from './config.js';
-import { hasCapability, normalizeConfiguredRole, resolveRoleAgentProfile } from './config.js';
+import { hasCapability, normalizeConfiguredRole, resolveRoleAgentProfile, resolveTimeout, resolveKillGrace } from './config.js';
+import type { StreamEvent } from './stream-parsers.js';
 import {
   insertMessage,
   insertMention,
@@ -63,10 +64,11 @@ export interface OrchestratorCallbacks {
   onJobStream(topicId: number, jobId: number, chunk: string): void;
   onJobRetrying(topicId: number, jobId: number, agentName: string, attempt: number, error: string): void;
   onJobRoundStarted(topicId: number, jobId: number, agentName: string, round: number, phase: string): void;
+  onJobActivity(topicId: number, jobId: number, agentName: string, event: StreamEvent): void;
   onJobWaitingInput(topicId: number, jobId: number, agentName: string, request: JobInputRequestPayload): void;
   onJobResumed(topicId: number, jobId: number, agentName: string, requestId: number, answeredByUserId: string): void;
   onJobCompleted(topicId: number, jobId: number, agentName: string, messageId: number): void;
-  onJobFailed(topicId: number, jobId: number, agentName: string, error: string): void;
+  onJobFailed(topicId: number, jobId: number, agentName: string, error: string, options?: { timedOut?: boolean }): void;
   onSystemMessage(topicId: number, messageId: number, text: string): void;
   onRuntimeChanged?(topicId: number): void;
 }
@@ -621,6 +623,17 @@ export class Orchestrator {
         userInputResultsText: params.userInputResultsText,
       });
 
+      if (result.timedOut) {
+        this.failJob(
+          params.topicId,
+          params.jobId,
+          params.agentName,
+          formatAgentFailure(result),
+          { timedOut: true }
+        );
+        return;
+      }
+
       if (pendingUserInput) {
         if (!params.requesterUserId) {
           this.failJob(params.topicId, params.jobId, params.agentName, 'User input requests require a resolved requester user_id');
@@ -840,10 +853,19 @@ export class Orchestrator {
         sandboxRunner: params.sandboxRunner,
         sandboxOptions: params.sandboxOptions,
         outputDir: params.outputDir,
+        timeoutMs: resolveTimeout(params.agentName, this.config),
+        killGraceMs: resolveKillGrace(params.agentName, this.config),
         onChunk: (chunk) => {
           this.callbacks.onJobStream(params.topicId, params.jobId, chunk);
         },
+        onActivity: (event) => {
+          this.callbacks.onJobActivity(params.topicId, params.jobId, params.agentName, event);
+        },
       });
+
+      if (result.timedOut) {
+        return { result, artifactReadAccess };
+      }
 
       if (!params.outputDir || result.exitCode !== 0) {
         return { result, artifactReadAccess };
@@ -1050,10 +1072,21 @@ export class Orchestrator {
     }
   }
 
-  private failJob(topicId: number, jobId: number, agentName: string, error: string): void {
+  private failJob(
+    topicId: number,
+    jobId: number,
+    agentName: string,
+    error: string,
+    options?: { timedOut?: boolean }
+  ): void {
     updateJobStatus(this.db, jobId, 'failed', { error });
-    emitEvent(this.db, 'agent.job.failed', topicId, JSON.stringify({ job_id: jobId, agent: agentName, error }));
-    this.callbacks.onJobFailed(topicId, jobId, agentName, error);
+    emitEvent(
+      this.db,
+      'agent.job.failed',
+      topicId,
+      JSON.stringify({ job_id: jobId, agent: agentName, error, ...(options?.timedOut ? { timed_out: true } : {}) })
+    );
+    this.callbacks.onJobFailed(topicId, jobId, agentName, error, options);
   }
 
   private insertSystemMessage(topicId: number, text: string): number {
@@ -1511,6 +1544,9 @@ function runDbOnlyAgent(command: string): JobResult {
 }
 
 function formatAgentFailure(result: JobResult): string {
+  if (result.timedOut) {
+    return result.error || 'Agent idle timeout';
+  }
   if (result.error) {
     return `Agent process failed to start: ${result.error}`;
   }
