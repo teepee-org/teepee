@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Agent } from '../types';
 import type { CommandDef } from '../buildHelpMarkdown';
-import { suggestReferences, type ReferenceSuggestItem } from '../api';
+import { useFileSelector, getPipeToken, parseToken, type FileEntry } from '../hooks/useFileSelector';
+import { FileDropdown } from './FileDropdown';
 
-type AutocompleteMode = 'agent' | 'command' | 'reference' | null;
-type ReferenceAutocompleteScope = 'inherited' | 'global';
+type AutocompleteMode = 'agent' | 'command' | null;
 
 // Module-level history map — survives component unmount/remount (Admin view, no active topic)
 const historyMap = new Map<number, string[]>();
@@ -12,21 +12,6 @@ const historyMap = new Map<number, string[]>();
 /** Exported for testing only. */
 export function _resetHistoryForTests() {
   historyMap.clear();
-}
-
-function parseReferenceAutocomplete(raw: string): {
-  query: string;
-  scope: ReferenceAutocompleteScope;
-} {
-  const trimmed = raw.trimStart();
-  if (!trimmed.startsWith('!')) {
-    return { query: raw, scope: 'inherited' };
-  }
-
-  return {
-    query: trimmed.slice(1).trimStart(),
-    scope: 'global',
-  };
 }
 
 interface Props {
@@ -86,13 +71,48 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     c.command.toLowerCase().startsWith('/' + autocompleteFilter.toLowerCase())
   );
 
-  const [refSuggestions, setRefSuggestions] = useState<ReferenceSuggestItem[]>([]);
-  const refDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  // ── File selector (pipe trigger) ──
+  const fs = useFileSelector();
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
 
-  const acItems = acMode === 'agent' ? filteredAgents.length : acMode === 'command' ? filteredCommands.length : acMode === 'reference' ? refSuggestions.length : 0;
+  const computeDropdownPosition = useCallback(() => {
+    const ta = inputRef.current;
+    if (!ta) return { top: 0, left: 0 };
+    const rect = ta.getBoundingClientRect();
+    return { top: rect.top - 8, left: rect.left };
+  }, []);
+
+  const acItems = acMode === 'agent' ? filteredAgents.length : acMode === 'command' ? filteredCommands.length : 0;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // File selector takes priority when open
+      if (fs.isOpen) {
+        switch (e.key) {
+          case 'ArrowDown':
+            e.preventDefault();
+            fs.moveSelection(1);
+            return;
+          case 'ArrowUp':
+            e.preventDefault();
+            fs.moveSelection(-1);
+            return;
+          case 'Tab':
+          case 'Enter': {
+            const selected = fs.getSelected();
+            if (selected) {
+              e.preventDefault();
+              insertFile(selected);
+            }
+            return;
+          }
+          case 'Escape':
+            e.preventDefault();
+            fs.close();
+            return;
+        }
+      }
+
       // Autocomplete takes priority over everything
       if (acMode) {
         if (e.key === 'ArrowDown') {
@@ -111,8 +131,6 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
             insertMention(filteredAgents[selectedIdx].name);
           } else if (acMode === 'command' && filteredCommands[selectedIdx]) {
             insertCommand(filteredCommands[selectedIdx].command);
-          } else if (acMode === 'reference' && refSuggestions[selectedIdx]) {
-            insertReference(refSuggestions[selectedIdx]);
           }
           return;
         }
@@ -120,11 +138,6 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
           if (acMode === 'agent' && filteredAgents[selectedIdx]) {
             e.preventDefault();
             insertMention(filteredAgents[selectedIdx].name);
-            return;
-          }
-          if (acMode === 'reference' && refSuggestions[selectedIdx]) {
-            e.preventDefault();
-            insertReference(refSuggestions[selectedIdx]);
             return;
           }
           // For commands, Enter sends the text (don't intercept)
@@ -183,7 +196,7 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
         }
       }
     },
-    [acMode, acItems, filteredAgents, filteredCommands, refSuggestions, selectedIdx, text, disabled, onSend, historyIndex, historyDraft, topicId]
+    [acMode, acItems, filteredAgents, filteredCommands, selectedIdx, text, disabled, onSend, historyIndex, historyDraft, topicId, fs]
   );
 
   const insertMention = (name: string) => {
@@ -223,42 +236,66 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
     }, 0);
   };
 
-  const insertReference = (item: ReferenceSuggestItem) => {
-    const textarea = inputRef.current;
-    if (!textarea) return;
+  const insertFile = useCallback(
+    (entry: FileEntry) => {
+      const ta = inputRef.current;
+      if (!ta) return;
 
-    const pos = textarea.selectionStart;
-    const before = text.slice(0, pos);
-    const after = text.slice(pos);
+      const cursor = ta.selectionStart ?? text.length;
+      const pipeToken = getPipeToken(text, cursor);
+      if (!pipeToken) return;
 
-    const bracketIdx = before.lastIndexOf('[[');
-    if (bracketIdx === -1) return;
+      const parsed = parseToken(pipeToken.token);
+      if (!parsed) return;
 
-    const suffix = item.continueAutocomplete ? '' : ' ';
-    const newText = before.slice(0, bracketIdx) + item.insertText + suffix + after;
-    setText(newText);
-    setSelectedIdx(0);
+      const before = text.slice(0, pipeToken.start);
+      const after = text.slice(cursor);
 
-    if (item.continueAutocomplete) {
-      const partial = item.insertText.startsWith('[[') ? item.insertText.slice(2) : item.insertText;
-      const { query, scope } = parseReferenceAutocomplete(partial);
-      setAutocompleteFilter(partial);
-      setAcMode('reference');
-      setRefSuggestions([]);
-      suggestReferences(query, topicId, 15, scope)
-        .then((res) => setRefSuggestions(res.items))
-        .catch(() => setRefSuggestions([]));
-    } else {
-      setAcMode(null);
-      setRefSuggestions([]);
-    }
+      if (entry.isDirectory) {
+        // Directory: update text and continue navigating
+        const newToken = `${parsed.prefix}${parsed.dir}${entry.name}/`;
+        const newText = before + newToken + after;
+        setText(newText);
+        const newCursor = before.length + newToken.length;
 
-    setTimeout(() => {
-      const newPos = bracketIdx + item.insertText.length + suffix.length;
-      textarea.setSelectionRange(newPos, newPos);
-      textarea.focus();
-    }, 0);
-  };
+        requestAnimationFrame(() => {
+          ta.focus();
+          ta.setSelectionRange(newCursor, newCursor);
+        });
+
+        fs.updateQuery(newToken);
+        return;
+      }
+
+      // File: insert markdown link and close
+      if (entry.insertText) {
+        // Server provided the markdown link — use it directly
+        const replacement = entry.insertText + ' ';
+        const newText = before + replacement + after;
+        setText(newText);
+        fs.close();
+
+        const newCursor = before.length + replacement.length;
+        requestAnimationFrame(() => {
+          ta.focus();
+          ta.setSelectionRange(newCursor, newCursor);
+        });
+      } else {
+        // Fallback: insert as plain text
+        const replacement = `${parsed.prefix}${parsed.dir}${entry.name} `;
+        const newText = before + replacement + after;
+        setText(newText);
+        fs.close();
+
+        const newCursor = before.length + replacement.length;
+        requestAnimationFrame(() => {
+          ta.focus();
+          ta.setSelectionRange(newCursor, newCursor);
+        });
+      }
+    },
+    [text, fs]
+  );
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -282,23 +319,27 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
       return;
     }
 
-    // Check for [[ reference autocomplete trigger
-    const bracketIdx = before.lastIndexOf('[[');
-    if (bracketIdx !== -1 && !before.slice(bracketIdx).includes(']]')) {
-      const partial = before.slice(bracketIdx + 2);
-      if (!partial.includes('\n')) {
-        const { query, scope } = parseReferenceAutocomplete(partial);
-        setAutocompleteFilter(partial);
-        setSelectedIdx(0);
-        setAcMode('reference');
-        if (refDebounceRef.current) clearTimeout(refDebounceRef.current);
-        refDebounceRef.current = setTimeout(() => {
-          suggestReferences(query, topicId, 15, scope)
-            .then((res) => setRefSuggestions(res.items))
-            .catch(() => setRefSuggestions([]));
-        }, 150);
+    // Check for | pipe file selector trigger
+    const pipeToken = getPipeToken(value, pos);
+    if (pipeToken) {
+      const parsed = parseToken(pipeToken.token);
+      if (!parsed) {
+        // Escape (space after |)
+        if (fs.isOpen) fs.close();
+      } else if (!fs.isOpen) {
+        setDropdownPos(computeDropdownPosition());
+        fs.open(pipeToken.start, pipeToken.token);
+      } else {
+        const ok = fs.updateQuery(pipeToken.token);
+        if (!ok) fs.close();
+      }
+      // Don't activate other autocomplete modes while file selector is open
+      if (fs.isOpen || parsed) {
+        setAcMode(null);
         return;
       }
+    } else if (fs.isOpen) {
+      fs.close();
     }
 
     // Check for @ autocomplete trigger
@@ -358,39 +399,27 @@ export function ComposeBox({ topicId, agents, commands, onSend, disabled }: Prop
           ))}
         </div>
       )}
-      {acMode === 'reference' && refSuggestions.length > 0 && (
-        <div className="autocomplete-dropdown" ref={dropdownRef}>
-          {refSuggestions.map((item, i) => (
-            <div
-              key={item.canonicalUri}
-              className={`autocomplete-item ${i === selectedIdx ? 'selected' : ''}`}
-              onClick={() => insertReference(item)}
-            >
-              <span className="autocomplete-ref-icon">
-                {item.type === 'artifact_document'
-                  ? '📄'
-                  : item.type === 'workspace_dir' || item.type === 'filesystem_dir'
-                    ? '📁'
-                    : '🗂️'}
-              </span>
-              <span className="autocomplete-ref-label">{item.label}</span>
-              <span className="autocomplete-provider">{item.description}</span>
-            </div>
-          ))}
-        </div>
+      {fs.isOpen && (
+        <FileDropdown
+          entries={fs.entries}
+          activeIndex={fs.activeIndex}
+          loading={fs.loading}
+          position={dropdownPos}
+          onSelect={insertFile}
+        />
       )}
       <textarea
         ref={inputRef}
         value={text}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'Read-only' : 'Type a message... (/help, @agent, [[file)'}
+        placeholder={disabled ? 'Read-only' : 'Type a message... (/help, @agent, |file)'}
         disabled={disabled}
         rows={3}
       />
       {!disabled && (
         <div className="compose-hint">
-          <code>/help</code> commands · <code>@</code> agents · <code>[[</code> refs · <code>[[/path</code> host fs · <code>[[!</code> all docs
+          <code>/help</code> commands · <code>@</code> agents · <code>|</code> files · <code>fs|</code> filesystem · <code>tp|</code> topics
         </div>
       )}
     </div>

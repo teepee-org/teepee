@@ -143,6 +143,37 @@ export function moveTopicBefore(db: DatabaseType, topicId: number, targetId: num
   );
 }
 
+/** List direct children (non-archived) of a parent topic. Null parent = root topics. */
+export function listTopicChildren(db: DatabaseType, parentId: number | null): TopicRow[] {
+  if (parentId === null) {
+    return db.prepare(`SELECT ${TOPIC_COLS} FROM topics WHERE parent_topic_id IS NULL AND archived = 0 ORDER BY sort_order`)
+      .all() as TopicRow[];
+  }
+  return db.prepare(`SELECT ${TOPIC_COLS} FROM topics WHERE parent_topic_id = ? AND archived = 0 ORDER BY sort_order`)
+    .all(parentId) as TopicRow[];
+}
+
+/**
+ * Walk a path of topic names to find the leaf topic.
+ * E.g. ["Backend", "API Design"] finds the "API Design" topic whose parent is "Backend" at root.
+ */
+export function findTopicByPath(db: DatabaseType, pathSegments: string[]): TopicRow | undefined {
+  let parentId: number | null = null;
+  let topic: TopicRow | undefined;
+  for (const segment of pathSegments) {
+    let row: TopicRow | undefined;
+    if (parentId === null) {
+      row = db.prepare(`SELECT ${TOPIC_COLS} FROM topics WHERE parent_topic_id IS NULL AND name = ? AND archived = 0`).get(segment) as TopicRow | undefined;
+    } else {
+      row = db.prepare(`SELECT ${TOPIC_COLS} FROM topics WHERE parent_topic_id = ? AND name = ? AND archived = 0`).get(parentId, segment) as TopicRow | undefined;
+    }
+    if (!row) return undefined;
+    topic = row;
+    parentId = row.id;
+  }
+  return topic;
+}
+
 /** Move topic to be a sibling of targetId, placed immediately after it. */
 export function moveTopicAfter(db: DatabaseType, topicId: number, targetId: number): void {
   if (topicId === targetId) return; // no-op

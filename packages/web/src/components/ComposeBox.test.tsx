@@ -1,15 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { suggestReferences } from '../api';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ComposeBox, _resetHistoryForTests } from './ComposeBox';
-
-vi.mock('../api', async () => {
-  const actual = await vi.importActual<typeof import('../api')>('../api');
-  return {
-    ...actual,
-    suggestReferences: vi.fn().mockResolvedValue({ items: [] }),
-  };
-});
 
 // jsdom doesn't implement scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
@@ -22,7 +13,6 @@ const COMMANDS = [
 
 beforeEach(() => {
   _resetHistoryForTests();
-  vi.mocked(suggestReferences).mockClear();
 });
 
 function renderCompose(topicId = 1, onSendReturn = true) {
@@ -230,45 +220,4 @@ describe('compose history', () => {
     expect(textarea2.value).toBe('before unmount');
   });
 
-  it('uses global reference scope when the query starts with !', async () => {
-    const { textarea } = renderCompose();
-
-    fireEvent.change(textarea, { target: { value: '[[!queue' } });
-
-    await waitFor(() => {
-      expect(vi.mocked(suggestReferences)).toHaveBeenCalledWith('queue', 1, 15, 'global');
-    });
-  });
-
-  it('keeps reference autocomplete open when selecting a directory suggestion', async () => {
-    vi.mocked(suggestReferences)
-      .mockResolvedValueOnce({
-        items: [
-          {
-            type: 'filesystem_dir',
-            label: 'host/etc/',
-            insertText: '[[/etc/',
-            canonicalUri: 'teepee:/fs/host/etc/',
-            description: 'host directory',
-            continueAutocomplete: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({ items: [] });
-
-    const { textarea } = renderCompose();
-    fireEvent.change(textarea, { target: { value: '[[/et' } });
-
-    await waitFor(() => {
-      expect(screen.getByText('host/etc/')).toBeTruthy();
-    });
-
-    fireEvent.keyDown(textarea, { key: 'Enter' });
-
-    expect(textarea.value).toBe('[[/etc/');
-
-    await waitFor(() => {
-      expect(vi.mocked(suggestReferences)).toHaveBeenLastCalledWith('/etc/', 1, 15, 'inherited');
-    });
-  });
 });
