@@ -53,10 +53,15 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
     failed: '❌',
   };
 
+  const alive = status === 'running' || status === 'streaming' || status === 'queued';
+
   return (
     <div className={`agent-slot ${status}`}>
       <div className="agent-slot-header">
-        <span className="agent-slot-name">🤖 {agentName}</span>
+        <span className="agent-slot-name">
+          🤖 {agentName}
+          {alive && <span className="agent-slot-live-dot" aria-hidden="true" />}
+        </span>
         <span className={`agent-slot-status status-${status}`}>
           {statusIcon[status]} {statusLabel[status]}
         </span>
@@ -71,7 +76,10 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
         {status === 'failed' && error ? (
           <div className="agent-error">{error}</div>
         ) : streamContent ? (
-          <MarkdownRenderer projectPath={projectPath} onOpenReference={onOpenReference}>{streamContent}</MarkdownRenderer>
+          <>
+            <MarkdownRenderer projectPath={projectPath} onOpenReference={onOpenReference}>{streamContent}</MarkdownRenderer>
+            {alive && <span className="agent-slot-cursor" aria-hidden="true" />}
+          </>
         ) : status === 'queued' || status === 'running' ? (
           <div className="agent-thinking">
             <span className="dots">...</span>

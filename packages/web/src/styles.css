@@ -836,6 +836,47 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Continuous "still alive" signal next to the agent name while a job runs */
+.agent-slot-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: live-dot-pulse 1.4s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.5);
+}
+
+@keyframes live-dot-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.5);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 0 0 6px rgba(96, 165, 250, 0);
+  }
+}
+
+/* Blinking caret at the tail of streaming markdown, like a terminal cursor */
+.agent-slot-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  to { visibility: hidden; }
+}
+
 .agent-slot-body {
   padding: 12px;
   font-size: 14px;
