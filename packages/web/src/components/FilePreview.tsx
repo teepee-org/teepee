@@ -187,9 +187,15 @@ export function FilePreview({ selection, projectPath, onOpenReference }: Props) 
 }
 
 function CodeBlock({ content, language }: { content: string; language: string }) {
-  const lines = highlightCodeAsLines(content, language);
+  let lines: string[];
+  try {
+    lines = highlightCodeAsLines(content, language);
+  } catch {
+    // Fallback: plain lines if highlight fails
+    lines = content.split('\n').map(escapeHtml);
+  }
   return (
-    <pre className={`file-preview-code hljs language-${language}`}>
+    <pre className={`file-preview-code language-${language}`}>
       <code>
         {lines.map((line, idx) => (
           <span key={idx} className="file-preview-code-line">
@@ -203,6 +209,15 @@ function CodeBlock({ content, language }: { content: string; language: string })
       </code>
     </pre>
   );
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function inferLanguage(name: string, mime: string): string {
