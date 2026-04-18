@@ -8,3 +8,4 @@ dist/
 .codex
 PLAN-*.md
 packages/web/src/**/*.js
+.tmp/
