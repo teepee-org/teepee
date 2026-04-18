@@ -580,6 +580,13 @@ body {
   margin-bottom: 4px;
 }
 
+.message-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
 .author {
   font-weight: 600;
   font-size: 14px;
@@ -616,7 +623,8 @@ body {
   color: var(--error);
 }
 
-.raw-toggle {
+.raw-toggle,
+.message-copy {
   background: none;
   border: none;
   color: var(--text-muted);
@@ -625,7 +633,8 @@ body {
   padding: 2px 4px;
 }
 
-.raw-toggle:hover {
+.raw-toggle:hover,
+.message-copy:hover {
   color: var(--accent);
 }
 
@@ -803,6 +812,13 @@ body {
 .status-streaming { color: var(--accent); }
 .status-done { color: var(--success); }
 .status-failed { color: var(--error); }
+
+.agent-slot-phase {
+  padding: 6px 12px 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 .agent-slot-body {
   padding: 12px;
@@ -2817,4 +2833,86 @@ body {
 .job-input-error {
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ── File Selector Dropdown ── */
+
+.file-dropdown {
+  position: fixed;
+  width: 400px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface, #1e1e3a);
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  transform: translateY(-100%);
+}
+
+.file-dropdown ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-dropdown-status {
+  padding: 12px 16px;
+  text-align: center;
+  color: var(--text-muted, #8a8a9a);
+  font-size: 13px;
+}
+
+.file-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.file-entry:hover,
+.file-entry.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.source-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.source-fs {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.source-tp {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.file-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.file-slash {
+  color: var(--text-muted, #8a8a9a);
+  flex-shrink: 0;
 }

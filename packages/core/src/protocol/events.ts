@@ -38,6 +38,15 @@ export interface AgentJobRetryingEvent {
   error: string;
 }
 
+export interface AgentJobRoundStartedEvent {
+  type: 'agent.job.round_started';
+  topicId: number;
+  jobId: number;
+  agentName: string;
+  round: number;
+  phase: string;
+}
+
 export interface AgentJobCompletedEvent {
   type: 'agent.job.completed';
   topicId: number;
@@ -149,6 +158,7 @@ export type ServerEvent =
   | MessageStreamEvent
   | AgentJobStartedEvent
   | AgentJobRetryingEvent
+  | AgentJobRoundStartedEvent
   | AgentJobWaitingInputEvent
   | AgentJobResumedEvent
   | AgentJobCompletedEvent

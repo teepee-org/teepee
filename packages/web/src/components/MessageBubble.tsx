@@ -15,6 +15,7 @@ interface Props {
 export function MessageBubble({ message, highlighted = false, onOpenArtifact, projectPath, onOpenReference }: Props) {
   const [showRaw, setShowRaw] = useState(false);
   const [artifacts, setArtifacts] = useState<MessageArtifactInfo[]>([]);
+  const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle');
   const isSystem = message.author_type === 'system';
   const isAgent = message.author_type === 'agent';
   const isRichSystem = isSystem && message.body.includes('\n');
@@ -25,6 +26,18 @@ export function MessageBubble({ message, highlighted = false, onOpenArtifact, pr
       fetchMessageArtifacts(message.id).then(setArtifacts).catch(() => {});
     }
   }, [message.id, isAgent]);
+
+  const handleCopy = async () => {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(message.body);
+      setCopyState('done');
+      window.setTimeout(() => setCopyState('idle'), 1500);
+    } catch {
+      setCopyState('error');
+      window.setTimeout(() => setCopyState('idle'), 2000);
+    }
+  };
 
   return (
     <div
@@ -48,15 +61,24 @@ export function MessageBubble({ message, highlighted = false, onOpenArtifact, pr
             failed
           </span>
         )}
-        {!isSystem && (
+        <div className="message-header-actions">
           <button
-            className="raw-toggle"
-            onClick={() => setShowRaw(!showRaw)}
-            title={showRaw ? 'Rendered view' : 'Raw view'}
+            className="message-copy"
+            onClick={handleCopy}
+            title="Copy markdown source"
           >
-            {showRaw ? '📄' : '</>'}
+            {copyState === 'done' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
           </button>
-        )}
+          {!isSystem && (
+            <button
+              className="raw-toggle"
+              onClick={() => setShowRaw(!showRaw)}
+              title={showRaw ? 'Rendered view' : 'Raw view'}
+            >
+              {showRaw ? '📄' : '</>'}
+            </button>
+          )}
+        </div>
       </div>
       <div className="message-body">
         {showRaw || (isSystem && !isRichSystem) ? (

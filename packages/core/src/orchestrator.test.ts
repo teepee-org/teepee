@@ -81,6 +81,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobStarted: [],
     onJobStream: [],
     onJobRetrying: [],
+    onJobRoundStarted: [],
     onJobWaitingInput: [],
     onJobResumed: [],
     onJobCompleted: [],
@@ -93,6 +94,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobStarted: (...args: any[]) => { calls.onJobStarted.push(args); },
     onJobStream: (...args: any[]) => { calls.onJobStream.push(args); },
     onJobRetrying: (...args: any[]) => { calls.onJobRetrying.push(args); },
+    onJobRoundStarted: (...args: any[]) => { calls.onJobRoundStarted.push(args); },
     onJobWaitingInput: (...args: any[]) => { calls.onJobWaitingInput.push(args); },
     onJobResumed: (...args: any[]) => { calls.onJobResumed.push(args); },
     onJobCompleted: (...args: any[]) => { calls.onJobCompleted.push(args); },
@@ -177,7 +179,7 @@ describe('Orchestrator security', () => {
 
     expect(callbacks.calls.onJobFailed.length).toBe(0);
     expect(callbacks.calls.onSystemMessage.length).toBe(1);
-    const [, text] = callbacks.calls.onSystemMessage[0];
+    const [, , text] = callbacks.calls.onSystemMessage[0];
     expect(text).toContain('Permission denied');
     const jobs = db.prepare('SELECT * FROM jobs').all() as any[];
     expect(jobs.length).toBe(0);
@@ -195,7 +197,7 @@ describe('Orchestrator security', () => {
     // so no job is created at all — a system denied message is emitted instead
     expect(callbacks.calls.onJobFailed.length).toBe(0);
     expect(callbacks.calls.onSystemMessage.length).toBeGreaterThan(0);
-    const [, text] = callbacks.calls.onSystemMessage[0];
+    const [, , text] = callbacks.calls.onSystemMessage[0];
     expect(text).toContain('Permission denied');
   });
 
@@ -516,7 +518,7 @@ describe('Orchestrator security', () => {
 
     // System message about chain denial
     expect(callbacks.calls.onSystemMessage.length).toBeGreaterThan(0);
-    const sysMsgs = callbacks.calls.onSystemMessage.map((c: any) => c[1]);
+    const sysMsgs = callbacks.calls.onSystemMessage.map((c: any) => c[2]);
     expect(sysMsgs.some((m: string) => m.includes('Chain delegation denied'))).toBe(true);
   });
 
@@ -794,7 +796,7 @@ describe('Orchestrator security', () => {
         "const path = require('path');",
         "const input = fs.readFileSync(0, 'utf8');",
         "const out = process.env.TEEPEE_OUTPUT_DIR;",
-        "if (!input.includes('[artifact-op-results]')) {",
+        "if (!input.includes('[artifact-op-results]\\n{')) {",
         "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
         "    { op_id: 'r1', op: 'read-current', artifact_id: 1 },",
         "    { op_id: 'r2', op: 'read-version', artifact_id: 1, version: 1 },",
@@ -835,6 +837,17 @@ describe('Orchestrator security', () => {
     expect(versions[2].body).toContain('Current: # v2');
     expect(versions[2].body).toContain('Previous: # v1');
     expect(callbacks.calls.onJobCompleted).toHaveLength(1);
+
+    const summaryCalls = callbacks.calls.onSystemMessage.filter((c: any[]) =>
+      typeof c[2] === 'string' && c[2].includes('📄 artifact')
+    );
+    expect(summaryCalls).toHaveLength(1);
+    expect(summaryCalls[0][2]).toContain(`"Plan" → v3 (updated)`);
+
+    const sysRows = db
+      .prepare("SELECT body FROM messages WHERE topic_id = ? AND author_type = 'system'")
+      .all(topicId) as Array<{ body: string }>;
+    expect(sysRows.some((r) => r.body.includes('📄 artifact "Plan" → v3 (updated)'))).toBe(true);
   });
 
   it('supports rewrite-from-version after reading both head and source version', async () => {
@@ -859,7 +872,7 @@ describe('Orchestrator security', () => {
         "const path = require('path');",
         "const input = fs.readFileSync(0, 'utf8');",
         "const out = process.env.TEEPEE_OUTPUT_DIR;",
-        "if (!input.includes('[artifact-op-results]')) {",
+        "if (!input.includes('[artifact-op-results]\\n{')) {",
         "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
         "    { op_id: 'r1', op: 'read-current', artifact_id: 1 },",
         "    { op_id: 'r2', op: 'read-version', artifact_id: 1, version: 1 }",
@@ -987,7 +1000,7 @@ describe('Orchestrator security', () => {
         "  ] }));",
         "  fs.writeFileSync(path.join(out, 'response.md'), 'First attempt');",
         "  console.log('first attempt');",
-        "} else if (!input.includes('[artifact-op-results]')) {",
+        "} else if (!input.includes('[artifact-op-results]\\n{')) {",
         "  fs.writeFileSync(path.join(out, 'artifact-ops.json'), JSON.stringify({ operations: [",
         "    { op_id: 'r1', op: 'read-current', artifact_id: 1 }",
         "  ] }));",

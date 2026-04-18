@@ -26,9 +26,11 @@ import { getTopicLineage } from './db/topics.js';
 import { parseMentions, resolveAliases } from './mentions.js';
 import { filterAllowedAgents } from './permissions.js';
 import { buildContext, runAgent, type JobResult } from './executor.js';
+import { buildSandboxAuthMountPlan, buildSandboxCommandMountPlan } from './command.js';
 import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
 import {
   commitPreparedArtifactIngest,
+  formatIngestSummary,
   prepareArtifactIngest,
   type IngestErrorDetail,
   type PreparedArtifactIngest,
@@ -60,11 +62,12 @@ export interface OrchestratorCallbacks {
   onJobStarted(topicId: number, jobId: number, agentName: string): void;
   onJobStream(topicId: number, jobId: number, chunk: string): void;
   onJobRetrying(topicId: number, jobId: number, agentName: string, attempt: number, error: string): void;
+  onJobRoundStarted(topicId: number, jobId: number, agentName: string, round: number, phase: string): void;
   onJobWaitingInput(topicId: number, jobId: number, agentName: string, request: JobInputRequestPayload): void;
   onJobResumed(topicId: number, jobId: number, agentName: string, requestId: number, answeredByUserId: string): void;
   onJobCompleted(topicId: number, jobId: number, agentName: string, messageId: number): void;
   onJobFailed(topicId: number, jobId: number, agentName: string, error: string): void;
-  onSystemMessage(topicId: number, text: string): void;
+  onSystemMessage(topicId: number, messageId: number, text: string): void;
   onRuntimeChanged?(topicId: number): void;
 }
 
@@ -177,16 +180,15 @@ export class Orchestrator {
     );
 
     if (rateLimited) {
-      const sysMsg = `Rate limit reached. Try again later.`;
-      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
-      this.callbacks.onSystemMessage(topicId, sysMsg);
+      this.insertSystemMessage(topicId, `Rate limit reached. Try again later.`);
       return;
     }
 
     if (denied.length > 0) {
-      const sysMsg = `Permission denied for: ${denied.map((a) => '@' + a).join(', ')}`;
-      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
-      this.callbacks.onSystemMessage(topicId, sysMsg);
+      this.insertSystemMessage(
+        topicId,
+        `Permission denied for: ${denied.map((a) => '@' + a).join(', ')}`
+      );
     }
 
     if (allowed.length === 0) return;
@@ -212,9 +214,7 @@ export class Orchestrator {
     const inheritedRole: UserRole = requesterRole ?? this.resolveUserRole(userEmail);
     const existingChainJobs = chainRootBatchId ? countChainJobs(this.db, chainRootBatchId) : 0;
     if (existingChainJobs + agents.length > this.config.limits.max_total_jobs_per_chain) {
-      const sysMsg = 'Chain job limit reached.';
-      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
-      this.callbacks.onSystemMessage(topicId, sysMsg);
+      this.insertSystemMessage(topicId, 'Chain job limit reached.');
       return null;
     }
 
@@ -533,6 +533,12 @@ export class Orchestrator {
       : undefined;
 
     const needsSandbox = params.effectiveMode === 'sandbox';
+    const providerSandboxPlan = needsSandbox && this.sandboxRunner.name === 'bubblewrap'
+      ? buildSandboxCommandMountPlan(command)
+      : null;
+    const providerAuthMounts = needsSandbox && this.sandboxRunner.name === 'bubblewrap'
+      ? buildSandboxAuthMountPlan(command)
+      : [];
     const sandboxOptions = needsSandbox ? {
       projectRoot: this.basePath,
       readOnlyProject: policy.sandboxReadOnly,
@@ -544,6 +550,9 @@ export class Orchestrator {
         ? (providerConfig.sandbox?.command ?? providerConfig.command)
         : undefined,
       outputDir: policy.canWriteArtifacts ? jobOutputDir : undefined,
+      extraReadOnlyPaths: providerSandboxPlan?.readOnlyPaths,
+      extraMounts: providerAuthMounts,
+      extraPathEntries: providerSandboxPlan?.pathEntries,
     } : undefined;
 
     await this.completeProviderJob({
@@ -744,6 +753,11 @@ export class Orchestrator {
         }));
       }
 
+      const ingestSummary = formatIngestSummary(committed.imported);
+      if (ingestSummary) {
+        this.insertSystemMessage(params.topicId, ingestSummary);
+      }
+
       emitEvent(this.db, 'agent.job.completed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName }));
       this.callbacks.onJobCompleted(params.topicId, params.jobId, params.agentName, committed.outputMessageId);
 
@@ -791,6 +805,17 @@ export class Orchestrator {
     for (let round = 0; round <= MAX_ARTIFACT_OP_ROUNDS; round++) {
       if (params.outputDir) {
         clearJobControlFiles(params.outputDir);
+      }
+
+      if (round > 0) {
+        const phase = `processing artifact read results (round ${round})`;
+        emitEvent(this.db, 'agent.job.round_started', params.topicId, JSON.stringify({
+          job_id: params.jobId,
+          agent: params.agentName,
+          round,
+          phase,
+        }));
+        this.callbacks.onJobRoundStarted(params.topicId, params.jobId, params.agentName, round, phase);
       }
 
       const context = buildContext(
@@ -1031,6 +1056,12 @@ export class Orchestrator {
     this.callbacks.onJobFailed(topicId, jobId, agentName, error);
   }
 
+  private insertSystemMessage(topicId: number, text: string): number {
+    const messageId = insertMessage(this.db, topicId, 'system', 'teepee', text);
+    this.callbacks.onSystemMessage(topicId, messageId, text);
+    return messageId;
+  }
+
   private pauseJobForUserInput(params: {
     topicId: number;
     jobId: number;
@@ -1096,7 +1127,7 @@ export class Orchestrator {
 
       const responder = getUserByIdOrThrow(this.db, responderUserId);
       const summary = formatDecisionSummary(request.title, responseValidation.response!, responder.handle ?? responder.email);
-      const decisionMessageId = insertMessage(this.db, request.topicId, 'system', 'teepee', summary);
+      const decisionMessageId = this.insertSystemMessage(request.topicId, summary);
       return { decisionMessageId };
     })();
 
@@ -1181,7 +1212,7 @@ export class Orchestrator {
       const cancelled = cancelJobInputRequest(this.db, requestId);
       if (!cancelled) throw new Error('Input request is no longer pending');
       cancelJob(this.db, request.jobId, 'User input request cancelled');
-      insertMessage(this.db, request.topicId, 'system', 'teepee', `Richiesta annullata: ${request.title}`);
+      this.insertSystemMessage(request.topicId, `Richiesta annullata: ${request.title}`);
     })();
 
     this.callbacks.onRuntimeChanged?.(request.topicId);
@@ -1246,6 +1277,12 @@ export class Orchestrator {
         ? listScopedArtifactContext(this.db, topicLineage)
         : undefined;
       const needsSandbox = params.effectiveMode === 'sandbox';
+      const providerSandboxPlan = needsSandbox && this.sandboxRunner.name === 'bubblewrap'
+        ? buildSandboxCommandMountPlan(providerConfig.command)
+        : null;
+      const providerAuthMounts = needsSandbox && this.sandboxRunner.name === 'bubblewrap'
+        ? buildSandboxAuthMountPlan(providerConfig.command)
+        : [];
       const sandboxOptions = needsSandbox ? {
         projectRoot: this.basePath,
         readOnlyProject: policy.sandboxReadOnly,
@@ -1257,6 +1294,9 @@ export class Orchestrator {
           ? (providerConfig.sandbox?.command ?? providerConfig.command)
           : undefined,
         outputDir: policy.canWriteArtifacts ? jobOutputDir : undefined,
+        extraReadOnlyPaths: providerSandboxPlan?.readOnlyPaths,
+        extraMounts: providerAuthMounts,
+        extraPathEntries: providerSandboxPlan?.pathEntries,
       } : undefined;
 
       await this.completeProviderJob({
@@ -1335,9 +1375,10 @@ export class Orchestrator {
     }
 
     if (denied.length > 0) {
-      const sysMsg = `Chain delegation denied for: ${denied.map((a) => '@' + a).join(', ')}`;
-      insertMessage(this.db, topicId, 'system', 'teepee', sysMsg);
-      this.callbacks.onSystemMessage(topicId, sysMsg);
+      this.insertSystemMessage(
+        topicId,
+        `Chain delegation denied for: ${denied.map((a) => '@' + a).join(', ')}`
+      );
     }
 
     if (allowed.length > 0) {

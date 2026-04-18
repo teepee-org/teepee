@@ -17,6 +17,8 @@ interface ActiveJob {
   status: 'queued' | 'running' | 'streaming' | 'done' | 'failed';
   streamContent: string;
   error?: string;
+  phase?: string;
+  round?: number;
 }
 
 interface Props {
@@ -209,6 +211,7 @@ export function ChatView({
             status={job.status}
             streamContent={job.streamContent}
             error={job.error}
+            phase={job.phase}
             projectPath={projectPath}
             onOpenReference={handleOpenReference}
           />

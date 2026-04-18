@@ -28,6 +28,7 @@ export function ArtifactViewer({ artifactId, versionId, versionNumber, canPromot
   const [promoteError, setPromoteError] = useState<string | null>(null);
   const [promoting, setPromoting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle');
 
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +99,14 @@ export function ArtifactViewer({ artifactId, versionId, versionNumber, canPromot
   };
 
   const handleCopy = async () => {
-    if (version) {
+    if (!version || !navigator.clipboard) return;
+    try {
       await navigator.clipboard.writeText(version.body);
+      setCopyState('done');
+      window.setTimeout(() => setCopyState('idle'), 1500);
+    } catch {
+      setCopyState('error');
+      window.setTimeout(() => setCopyState('idle'), 2000);
     }
   };
 
@@ -141,7 +148,9 @@ export function ArtifactViewer({ artifactId, versionId, versionNumber, canPromot
           </span>
         </div>
         <div className="artifact-viewer-actions">
-          <button onClick={handleCopy}>Copy</button>
+          <button onClick={handleCopy}>
+            {copyState === 'done' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy Markdown'}
+          </button>
           <a href={artifactDownloadUrl(artifactId, version.id)} download>Download</a>
           {canPromote && (
             <button onClick={handlePromote} disabled={promoting}>

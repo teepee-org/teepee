@@ -25,6 +25,8 @@ interface ActiveJob {
   status: 'queued' | 'running' | 'streaming' | 'done' | 'failed';
   streamContent: string;
   error?: string;
+  phase?: string;
+  round?: number;
 }
 
 interface AuthUser {
@@ -335,6 +337,37 @@ export function App() {
                 : j
             )
           );
+          break;
+
+        case 'agent.job.round_started':
+          updateTopicJobs(event.topicId, (prev) => {
+            const exists = prev.some((j) => j.jobId === event.jobId);
+            if (!exists) {
+              return [
+                ...prev,
+                {
+                  jobId: event.jobId,
+                  agentName: event.agentName,
+                  status: 'running',
+                  streamContent: '',
+                  phase: event.phase,
+                  round: event.round,
+                },
+              ];
+            }
+            return prev.map((j) =>
+              j.jobId === event.jobId
+                ? {
+                    ...j,
+                    status: 'running',
+                    streamContent: '',
+                    error: undefined,
+                    phase: event.phase,
+                    round: event.round,
+                  }
+                : j
+            );
+          });
           break;
 
         case 'agent.job.completed':

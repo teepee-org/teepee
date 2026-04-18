@@ -8,6 +8,7 @@ import {
   migrateConfigFileToV2,
   openDb,
   getMessages,
+  getMessageById,
   expirePendingJobInputRequests,
   failInterruptedJobs,
   Orchestrator,
@@ -101,6 +102,9 @@ export function startServer(
     onJobRetrying(topicId, jobId, agentName, attempt, error) {
       broadcast(topicId, { type: 'agent.job.retrying', topicId, jobId, agentName, attempt, error });
     },
+    onJobRoundStarted(topicId, jobId, agentName, round, phase) {
+      broadcast(topicId, { type: 'agent.job.round_started', topicId, jobId, agentName, round, phase });
+    },
     onJobWaitingInput(topicId, jobId, agentName, request) {
       broadcast(topicId, { type: 'agent.job.waiting_input', topicId, jobId, agentName, request });
     },
@@ -115,8 +119,13 @@ export function startServer(
     onJobFailed(topicId, jobId, agentName, error) {
       broadcast(topicId, { type: 'agent.job.failed', topicId, jobId, agentName, error });
     },
-    onSystemMessage(topicId, text) {
-      broadcast(topicId, { type: 'system', topicId, text });
+    onSystemMessage(topicId, messageId, text) {
+      const message = getMessageById(db, messageId);
+      if (message) {
+        broadcast(topicId, { type: 'message.created', topicId, message });
+      } else {
+        broadcast(topicId, { type: 'system', topicId, text });
+      }
     },
     onRuntimeChanged() {
       broadcastGlobal({ type: 'topics.changed' });
