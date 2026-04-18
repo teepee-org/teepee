@@ -102,6 +102,19 @@ export function FilePreview({ selection, projectPath, onOpenReference }: Props) 
     );
   }
 
+  if (state.status === 'not-file') {
+    // Defensive: selection just changed to a file but the effect
+    // has not yet run. Show loading until useEffect syncs.
+    return (
+      <div className="file-preview">
+        {breadcrumb}
+        <div className="file-preview-status">
+          <span className="dots">loading…</span>
+        </div>
+      </div>
+    );
+  }
+
   if (state.status === 'binary') {
     const isImage = state.response.mime.startsWith('image/');
     const isPdf = state.response.mime === 'application/pdf';
