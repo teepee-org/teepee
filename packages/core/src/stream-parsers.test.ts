@@ -4,6 +4,7 @@ import {
   CodexParser,
   GenericTextParser,
   collectNonStreamingProviderWarnings,
+  extractClaudeStreamJsonFinal,
   isClaudeStreamJson,
   isCodexExec,
   parserForCommand,
@@ -33,7 +34,46 @@ describe('parserForCommand selection', () => {
 });
 
 describe('ClaudeStreamJsonParser', () => {
-  it('emits tool_use with target for Read', () => {
+  it('emits tool_use and text events from a real Claude CLI assistant event', () => {
+    const p = new ClaudeStreamJsonParser(60);
+    const assistantEvent =
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'thinking', thinking: '' },
+            { type: 'tool_use', name: 'Read', input: { file_path: 'docs/notes.md' } },
+          ],
+        },
+      }) + '\n' +
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'The file contains the single word "hello".' },
+          ],
+        },
+      }) + '\n';
+    const events = p.feed(assistantEvent, 'stdout');
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual({ kind: 'tool_use', tool: 'Read', target: 'docs/notes.md' });
+    expect(events[1].kind).toBe('text_delta');
+    if (events[1].kind === 'text_delta') {
+      expect(events[1].text).toBe('The file contains the single word "hello".');
+      expect(events[1].preview).toContain('The file contains');
+    }
+  });
+
+  it('ignores system, rate_limit_event and tool_result events', () => {
+    const p = new ClaudeStreamJsonParser(60);
+    const input =
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'x' }) + '\n' +
+      JSON.stringify({ type: 'rate_limit_event', rate_limit_info: {} }) + '\n' +
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: '...' }] } }) + '\n';
+    expect(p.feed(input, 'stdout')).toEqual([]);
+  });
+
+  it('emits tool_use with target for Read (raw API event shape)', () => {
     const p = new ClaudeStreamJsonParser(60);
     const events = p.feed(
       JSON.stringify({
@@ -160,6 +200,30 @@ describe('command shape helpers', () => {
     expect(isCodexExec('codex exec --skip-git-repo-check')).toBe(true);
     expect(isCodexExec('/home/f/.nvm/.../codex exec')).toBe(true);
     expect(isCodexExec('claude -p')).toBe(false);
+  });
+});
+
+describe('extractClaudeStreamJsonFinal', () => {
+  it('returns the result field from a success event', () => {
+    const buffer =
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n' +
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'The file contains hello.' }] } }) + '\n' +
+      JSON.stringify({ type: 'result', subtype: 'success', result: 'The file contains hello.', session_id: 'x' }) + '\n';
+    expect(extractClaudeStreamJsonFinal(buffer)).toBe('The file contains hello.');
+  });
+
+  it('falls back to concatenated assistant text when no result event is present', () => {
+    const buffer =
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Part one. ' }] } }) + '\n' +
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Part two.' }] } }) + '\n';
+    expect(extractClaudeStreamJsonFinal(buffer)).toBe('Part one. Part two.');
+  });
+
+  it('returns null when the buffer contains no extractable text', () => {
+    const buffer =
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n' +
+      JSON.stringify({ type: 'rate_limit_event' }) + '\n';
+    expect(extractClaudeStreamJsonFinal(buffer)).toBeNull();
   });
 });
 

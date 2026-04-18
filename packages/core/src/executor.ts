@@ -6,7 +6,7 @@ import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
 import { prepareCommandParts, isCodexExecCommand, checkSandboxCommandAvailability, buildSandboxCommandMountPlan } from './command.js';
-import { parserForCommand, type StreamEvent } from './stream-parsers.js';
+import { parserForCommand, isClaudeStreamJson, extractClaudeStreamJsonFinal, type StreamEvent } from './stream-parsers.js';
 
 export interface JobResult {
   output: string;
@@ -239,6 +239,7 @@ export function runAgent(
   return new Promise((resolve) => {
     const parts = prepareCommandParts(opts.command);
     const isCodexExecJson = isCodexExecCommand(parts);
+    const isClaudeStreamJsonCmd = isClaudeStreamJson(opts.command);
 
     const RUNNABLE_MODES = new Set(['host', 'sandbox']);
     if (opts.executionMode && !RUNNABLE_MODES.has(opts.executionMode)) {
@@ -334,17 +335,32 @@ export function runAgent(
       idleTimer = setTimeout(onIdle, idleBudgetMs);
     };
 
-    // ── Stream parsing (activity events) ──
-    const parser = opts.onActivity ? parserForCommand(opts.command) : null;
+    // ── Stream parsing (activity events + structured text routing) ──
+    // Always build the parser: for stream-json providers we also use it to
+    // extract the *actual* assistant text out of the JSON event stream and
+    // forward only that to the UI (instead of the raw JSON which would look
+    // like noise in the chat bubble). For onActivity-only consumers the
+    // parser is still the right source of events.
+    const wantsParser = Boolean(opts.onActivity) || isClaudeStreamJsonCmd;
+    const parser = wantsParser ? parserForCommand(opts.command) : null;
 
     const handleChunk = (chunk: string, stream: 'stdout' | 'stderr') => {
       armIdleTimer(); // any chunk resets the idle timer
-      if (parser && opts.onActivity) {
-        for (const event of parser.feed(chunk, stream)) {
+      if (!parser) return;
+      for (const event of parser.feed(chunk, stream)) {
+        if (isClaudeStreamJsonCmd && event.kind === 'text_delta' && event.text) {
+          // Forward the parsed text (not the raw JSON chunk) to the UI.
+          try {
+            opts.onChunk?.(event.text);
+          } catch {
+            /* UI consumer errors must not break the run */
+          }
+        }
+        if (opts.onActivity) {
           try {
             opts.onActivity(event);
           } catch {
-            // UI consumer issues must not break the run.
+            /* as above */
           }
         }
       }
@@ -355,7 +371,11 @@ export function runAgent(
     proc.stdout!.on('data', (data: Buffer) => {
       const chunk = data.toString();
       output += chunk;
-      if (!isCodexExecJson) {
+      // Only forward the raw chunk to the UI stream for providers that emit
+      // plain text on stdout. Codex JSON and Claude stream-json are handled
+      // via their parsers (see handleChunk above / extractCodexFinalMessage
+      // / extractClaudeStreamJsonFinal).
+      if (!isCodexExecJson && !isClaudeStreamJsonCmd) {
         opts.onChunk?.(chunk);
       }
       handleChunk(chunk, 'stdout');
@@ -372,7 +392,14 @@ export function runAgent(
     });
 
     proc.on('close', (code, signal) => {
-      const normalizedOutput = isCodexExecJson ? extractCodexFinalMessage(output) : output.trim();
+      let normalizedOutput: string;
+      if (isCodexExecJson) {
+        normalizedOutput = extractCodexFinalMessage(output);
+      } else if (isClaudeStreamJsonCmd) {
+        normalizedOutput = extractClaudeStreamJsonFinal(output) ?? output.trim();
+      } else {
+        normalizedOutput = output.trim();
+      }
       if (timedOut) {
         const seconds = Math.round(idleBudgetMs / 1000);
         resolveOnce({

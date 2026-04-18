@@ -23,7 +23,17 @@
 export type StreamEvent =
   | { kind: 'tool_use'; tool: string; target?: string }
   | { kind: 'shell'; command: string }
-  | { kind: 'text_delta'; preview: string };
+  /**
+   * Assistant text delta.
+   *
+   * - `preview` is a short, whitespace-collapsed, length-capped string for
+   *   the UI activity indicator.
+   * - `text` (when present) is the full, un-truncated delta as emitted by
+   *   the provider. The runner forwards this to the message-stream pipeline
+   *   instead of the raw provider output when the provider emits structured
+   *   JSON rather than plain text (e.g. Claude `--output-format stream-json`).
+   */
+  | { kind: 'text_delta'; preview: string; text?: string };
 
 export interface StreamParser {
   /** Feed a raw chunk from the given stream; returns the events extracted. */
@@ -84,12 +94,21 @@ function summarizePreview(text: string, maxLength: number): string {
 /**
  * Claude `--output-format stream-json --verbose` parser.
  *
- * Events we care about:
- *   - assistant content_block_start with type=tool_use → { tool_use, tool, target? }
- *   - assistant content_block_delta with text_delta         → { text_delta }
+ * The Claude Code CLI emits newline-delimited JSON with events shaped like:
  *
- * Chunks from the child process may split across JSON lines; we buffer by
- * newline and parse each complete line.
+ *   { type: "system", subtype: "init", … }                 — ignored
+ *   { type: "rate_limit_event", … }                         — ignored
+ *   { type: "assistant", message: { content: [ { type: "thinking" | "tool_use" | "text", … } ] } }
+ *   { type: "user", message: { content: [ { type: "tool_result", … } ] } }
+ *   { type: "result", subtype: "success", result: "<final text>", … }
+ *
+ * For each assistant event we walk `message.content` and emit:
+ *   - tool_use blocks → StreamEvent.tool_use
+ *   - text blocks → StreamEvent.text_delta with the full text in `text` and a
+ *     short `preview` for the UI activity indicator.
+ *
+ * Chunks may split mid-line; we buffer by newline and parse each complete
+ * line as JSON.
  */
 export class ClaudeStreamJsonParser implements StreamParser {
   private buffer = '';
@@ -103,50 +122,105 @@ export class ClaudeStreamJsonParser implements StreamParser {
       const line = this.buffer.slice(0, newlineIdx).trim();
       this.buffer = this.buffer.slice(newlineIdx + 1);
       if (line.length > 0) {
-        const parsed = this.tryParseLine(line);
-        if (parsed) events.push(parsed);
+        for (const evt of this.tryParseLine(line)) {
+          events.push(evt);
+        }
       }
       newlineIdx = this.buffer.indexOf('\n');
     }
     return events;
   }
 
-  private tryParseLine(line: string): StreamEvent | null {
+  private tryParseLine(line: string): StreamEvent[] {
     let obj: any;
     try {
       obj = JSON.parse(line);
     } catch {
-      return null;
+      return [];
     }
-    // content_block_start with tool_use
+
+    // Raw Anthropic API streaming (kept for robustness if a future CLI mode
+    // uses the API-style events).
     if (obj?.type === 'content_block_start' && obj?.content_block?.type === 'tool_use') {
       const tool = String(obj.content_block.name ?? 'unknown');
-      const input = obj.content_block.input ?? {};
-      const target = extractToolTarget(tool, input);
-      return { kind: 'tool_use', tool, target };
+      const target = extractToolTarget(tool, obj.content_block.input ?? {});
+      return [{ kind: 'tool_use', tool, target }];
     }
-    // content_block_delta with text (the model is writing)
     if (obj?.type === 'content_block_delta' && obj?.delta?.type === 'text_delta' && typeof obj.delta.text === 'string') {
-      const preview = summarizePreview(obj.delta.text, this.previewLength);
-      if (preview.length === 0) return null;
-      return { kind: 'text_delta', preview };
+      const ev = this.buildTextEvent(obj.delta.text);
+      return ev ? [ev] : [];
     }
-    // Assistant message wrappers also expose nested content blocks.
-    if (obj?.type === 'message' && Array.isArray(obj?.message?.content)) {
-      for (const block of obj.message.content) {
+
+    // Claude Code CLI event wrappers — the common case.
+    const contentArrays: any[][] = [];
+    if ((obj?.type === 'assistant' || obj?.type === 'message') && Array.isArray(obj?.message?.content)) {
+      contentArrays.push(obj.message.content);
+    }
+
+    const events: StreamEvent[] = [];
+    for (const content of contentArrays) {
+      for (const block of content) {
         if (block?.type === 'tool_use') {
           const tool = String(block.name ?? 'unknown');
           const target = extractToolTarget(tool, block.input ?? {});
-          return { kind: 'tool_use', tool, target };
+          events.push({ kind: 'tool_use', tool, target });
+          continue;
         }
         if (block?.type === 'text' && typeof block.text === 'string') {
-          const preview = summarizePreview(block.text, this.previewLength);
-          if (preview.length > 0) return { kind: 'text_delta', preview };
+          const ev = this.buildTextEvent(block.text);
+          if (ev) events.push(ev);
+          continue;
+        }
+        // thinking / tool_result etc. are intentionally not surfaced as events
+        // (they would be noise in the UI).
+      }
+    }
+    return events;
+  }
+
+  private buildTextEvent(text: string): StreamEvent | null {
+    const preview = summarizePreview(text, this.previewLength);
+    if (preview.length === 0) return null;
+    return { kind: 'text_delta', preview, text };
+  }
+}
+
+/**
+ * Extract the final agent text from a Claude stream-json stdout buffer.
+ *
+ * Looks for the last `{ "type": "result", … }` line; if present returns its
+ * `result` string. Falls back to concatenating all `assistant.text` blocks.
+ * If nothing sensible can be extracted, returns `null` and the caller should
+ * fall back to the raw buffer.
+ */
+export function extractClaudeStreamJsonFinal(buffer: string): string | null {
+  const lines = buffer.split('\n');
+  let resultText: string | null = null;
+  const textPieces: string[] = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (obj?.type === 'result' && typeof obj.result === 'string') {
+      resultText = obj.result;
+      continue;
+    }
+    if (obj?.type === 'assistant' && Array.isArray(obj?.message?.content)) {
+      for (const block of obj.message.content) {
+        if (block?.type === 'text' && typeof block.text === 'string') {
+          textPieces.push(block.text);
         }
       }
     }
-    return null;
   }
+  if (resultText !== null) return resultText.trim();
+  if (textPieces.length > 0) return textPieces.join('').trim();
+  return null;
 }
 
 function extractToolTarget(tool: string, input: Record<string, unknown>): string | undefined {
