@@ -54,6 +54,13 @@ export class BubblewrapRunner extends SandboxRunner {
     if (fs.existsSync('/etc/resolv.conf')) {
       bwrapArgs.push('--ro-bind', '/etc/resolv.conf', '/etc/resolv.conf');
     }
+    // Basic user/group resolution for runtimes that call getpwuid()/getgrgid()
+    if (fs.existsSync('/etc/passwd')) {
+      bwrapArgs.push('--ro-bind', '/etc/passwd', '/etc/passwd');
+    }
+    if (fs.existsSync('/etc/group')) {
+      bwrapArgs.push('--ro-bind', '/etc/group', '/etc/group');
+    }
     // SSL certs
     if (fs.existsSync('/etc/ssl')) {
       bwrapArgs.push('--ro-bind', '/etc/ssl', '/etc/ssl');
@@ -84,7 +91,22 @@ export class BubblewrapRunner extends SandboxRunner {
     // Empty home
     if (options.emptyHome) {
       bwrapArgs.push('--tmpfs', '/home/agent');
-      bwrapArgs.push('--setenv', 'HOME', '/home/agent');
+    }
+
+    // Extra read-only mounts for provider CLIs installed outside the default sandbox-visible paths.
+    for (const extraPath of options.extraReadOnlyPaths ?? []) {
+      for (const dirToCreate of buildParentDirs(extraPath)) {
+        bwrapArgs.push('--dir', dirToCreate);
+      }
+      bwrapArgs.push('--ro-bind', extraPath, extraPath);
+    }
+
+    // Mount provider auth/config state after /home/agent is created, otherwise tmpfs would hide them.
+    for (const mount of options.extraMounts ?? []) {
+      for (const dirToCreate of buildParentDirs(mount.target)) {
+        bwrapArgs.push('--dir', dirToCreate);
+      }
+      bwrapArgs.push(mount.readOnly ? '--ro-bind' : '--bind', mount.source, mount.target);
     }
 
     // Working directory
@@ -103,10 +125,17 @@ export class BubblewrapRunner extends SandboxRunner {
 
     // Build minimal environment: only explicit allowlist
     const env: Record<string, string> = {
-      PATH: '/usr/local/bin:/usr/bin:/bin',
+      PATH: buildSandboxPath(options.extraPathEntries),
       LANG: 'C.UTF-8',
       TERM: 'dumb',
     };
+    if (options.emptyHome) {
+      env.HOME = '/home/agent';
+      env.XDG_CONFIG_HOME = '/home/agent/.config';
+      env.XDG_CACHE_HOME = '/home/agent/.cache';
+      env.XDG_STATE_HOME = '/home/agent/.local/state';
+      env.XDG_DATA_HOME = '/home/agent/.local/share';
+    }
     if (options.outputDir) {
       env.TEEPEE_OUTPUT_DIR = '/teepee-out';
     }
@@ -131,4 +160,21 @@ export class BubblewrapRunner extends SandboxRunner {
       env: {},
     });
   }
+}
+
+function buildParentDirs(targetPath: string): string[] {
+  const normalized = targetPath.replace(/\/+/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  const dirs: string[] = [];
+  let current = '';
+  for (let i = 0; i < parts.length - 1; i++) {
+    current += `/${parts[i]}`;
+    dirs.push(current);
+  }
+  return dirs;
+}
+
+function buildSandboxPath(extraEntries: string[] | undefined): string {
+  const baseEntries = ['/usr/local/bin', '/usr/bin', '/bin'];
+  return [...new Set([...(extraEntries ?? []), ...baseEntries])].join(':');
 }

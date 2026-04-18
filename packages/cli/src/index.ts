@@ -83,15 +83,30 @@ function isCommandAvailable(commandName: string): boolean {
   return result.status === 0;
 }
 
+function resolveCommandPath(commandName: string): string | null {
+  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(locator, [commandName], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (result.status !== 0) return null;
+  return result.stdout.split('\n').map((line) => line.trim()).find(Boolean) ?? null;
+}
+
+function isLinuxSandboxVisiblePath(commandPath: string | null): boolean {
+  if (!commandPath) return false;
+  return ['/usr/local/bin/', '/usr/bin/', '/bin/', '/sbin/'].some((prefix) => commandPath.startsWith(prefix));
+}
+
 interface StarterConfigResult {
   template: string;
   detectedProviders: string[];
 }
 
 function buildStarterConfig(projectName: string): StarterConfigResult {
-  const hasClaude = isCommandAvailable('claude');
-  const hasCodex = isCommandAvailable('codex');
-  const hasOllama = isCommandAvailable('ollama');
+  const claudePath = resolveCommandPath('claude');
+  const codexPath = resolveCommandPath('codex');
+  const ollamaPath = resolveCommandPath('ollama');
+  const hasClaude = process.platform === 'linux' ? isLinuxSandboxVisiblePath(claudePath) : isCommandAvailable('claude');
+  const hasCodex = process.platform === 'linux' ? isLinuxSandboxVisiblePath(codexPath) : isCommandAvailable('codex');
+  const hasOllama = process.platform === 'linux' ? isLinuxSandboxVisiblePath(ollamaPath) : isCommandAvailable('ollama');
   const detectedProviders: string[] = [];
   const providerLines = ['providers:'];
   const agentLines = ['agents:'];
@@ -153,6 +168,22 @@ function buildStarterConfig(projectName: string): StarterConfigResult {
     agentLines.push('  #   provider: codex');
     agentLines.push('  # devops:');
     agentLines.push('  #   provider: codex');
+  }
+
+  if (process.platform === 'linux') {
+    const skippedSandboxLocal = [
+      claudePath && !hasClaude ? `claude at ${claudePath}` : null,
+      codexPath && !hasCodex ? `codex at ${codexPath}` : null,
+      ollamaPath && !hasOllama ? `ollama at ${ollamaPath}` : null,
+    ].filter(Boolean) as string[];
+    if (skippedSandboxLocal.length > 0) {
+      providerLines.push('  #');
+      providerLines.push('  # Note: these CLIs were found on the host but skipped for sandboxed auto-config because');
+      providerLines.push('  # Linux bubblewrap only sees /usr/local/bin, /usr/bin, /bin, and /sbin by default:');
+      for (const item of skippedSandboxLocal) {
+        providerLines.push(`  # - ${item}`);
+      }
+    }
   }
 
   const collaboratorCapabilities = [

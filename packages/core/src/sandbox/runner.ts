@@ -17,6 +17,16 @@ export interface SandboxOptions {
   containerCommand?: string;
   /** Host path for the per-job output directory, mounted rw at /teepee-out inside the sandbox. */
   outputDir?: string;
+  /** Extra host paths to mount read-only inside the sandbox at the same absolute path. */
+  extraReadOnlyPaths?: string[];
+  /** Extra host paths to mount inside the sandbox at an explicit target path. */
+  extraMounts?: Array<{
+    source: string;
+    target: string;
+    readOnly?: boolean;
+  }>;
+  /** Extra PATH entries to prepend inside the sandbox. */
+  extraPathEntries?: string[];
 }
 
 /**

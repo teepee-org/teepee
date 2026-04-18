@@ -3,13 +3,19 @@ mode: private
 teepee:
   name: teepee-demo
   language: it
+security:
+  sandbox:
+    forward_env:
+      - OPENAI_API_KEY
+      - OPENAI_BASE_URL
+      - OPENAI_ORG_ID
+      - OPENAI_PROJECT_ID
 providers:
   claude:
-    command: claude -p --permission-mode bypassPermissions
-      --dangerously-skip-permissions
+    command: claude -p --permission-mode bypassPermissions --dangerously-skip-permissions
     timeout_seconds: 90000
   codex:
-    command: codex exec --dangerously-bypass-approvals-and-sandbox
+    command: codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox
     timeout_seconds: 90000
 agents:
   coder:
