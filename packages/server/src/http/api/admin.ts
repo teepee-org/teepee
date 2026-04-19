@@ -69,7 +69,7 @@ export function handleAdminRoutes(routeCtx: ApiRouteContext): boolean {
       try {
         const { email } = JSON.parse(body);
         const ok = revokeUserFull(ctx.db, email);
-        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot revoke last active owner' }, 400); }
+        if (ok) { json({ ok: true }); } else { json({ error: 'Cannot revoke: user not found, already revoked, or is the last active owner' }, 400); }
       } catch (e: any) { json({ error: e.message }, 400); }
     });
     return true;
