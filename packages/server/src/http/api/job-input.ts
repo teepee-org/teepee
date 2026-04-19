@@ -3,7 +3,7 @@ import {
   getPendingJobInputRequest,
   listVisibleTopicInputRequests,
 } from 'teepee-core';
-import { readBody } from '../utils.js';
+import { readBody, readJsonBody } from '../utils.js';
 import type { ApiRouteContext } from './context.js';
 
 export function handleJobInputRoutes(routeCtx: ApiRouteContext): boolean {
@@ -29,12 +29,16 @@ export function handleJobInputRoutes(routeCtx: ApiRouteContext): boolean {
   }
 
   if (url.pathname.match(/^\/api\/input-requests\/\d+\/answer$/) && req.method === 'POST') {
-    readBody(req).then(async (body) => {
+    void (async () => {
+      const body = await readJsonBody(req);
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
       try {
         expirePendingJobInputRequests(ctx.db);
         const requestId = parseInt(url.pathname.split('/')[3]);
-        const payload = JSON.parse(body);
-        const resumed = await ctx.orchestrator.resumeJobFromUserInput(requestId, currentUser.id, payload);
+        const resumed = await ctx.orchestrator.resumeJobFromUserInput(requestId, currentUser.id, body.value);
         ctx.broadcast(resumed.topicId, {
           type: 'job.input.answered',
           topicId: resumed.topicId,
@@ -51,12 +55,17 @@ export function handleJobInputRoutes(routeCtx: ApiRouteContext): boolean {
             : 400;
         json({ error: message }, status);
       }
-    });
+    })();
     return true;
   }
 
   if (url.pathname.match(/^\/api\/input-requests\/\d+\/cancel$/) && req.method === 'POST') {
-    readBody(req).then(async () => {
+    void (async () => {
+      const body = await readBody(req);
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
       try {
         expirePendingJobInputRequests(ctx.db);
         const requestId = parseInt(url.pathname.split('/')[3]);
@@ -77,7 +86,7 @@ export function handleJobInputRoutes(routeCtx: ApiRouteContext): boolean {
             : 400;
         json({ error: message }, status);
       }
-    });
+    })();
     return true;
   }
 

@@ -6,7 +6,7 @@ import {
   restoreTopic,
 } from 'teepee-core';
 import type { CommandContext } from 'teepee-core';
-import { readBody } from '../utils.js';
+import { readJsonBody } from '../utils.js';
 import type { ApiRouteContext } from './context.js';
 
 export function handleTopicManagementRoutes(routeCtx: ApiRouteContext): boolean {
@@ -16,24 +16,24 @@ export function handleTopicManagementRoutes(routeCtx: ApiRouteContext): boolean 
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/move$/) && req.method === 'POST') {
     if (!requireCapability('topics.move', 'You are not allowed to modify topics')) return true;
-    readBody(req).then((body) => {
-      try {
-        const { action, targetId } = JSON.parse(body);
-        const topicId = parseInt(url.pathname.split('/')[3]);
-        const commandMap: Record<string, string> = {
-          root: 'topic.move.root',
-          into: 'topic.move.into',
-          before: 'topic.move.before',
-          after: 'topic.move.after',
-        };
-        const cmdName = commandMap[action];
-        if (!cmdName) { json({ error: `Invalid move action: ${action}` }, 400); return; }
-        const cmdCtx: CommandContext = { db: ctx.db, config: ctx.config, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
-        const result = executeCommand(cmdName, cmdCtx, { targetId });
-        if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
-      } catch (e: any) {
-        json({ error: e.message }, 400);
+    void readJsonBody<{ action?: string; targetId?: number }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
       }
+      const { action, targetId } = body.value;
+      const topicId = parseInt(url.pathname.split('/')[3]);
+      const commandMap: Record<string, string> = {
+        root: 'topic.move.root',
+        into: 'topic.move.into',
+        before: 'topic.move.before',
+        after: 'topic.move.after',
+      };
+      const cmdName = action ? commandMap[action] : undefined;
+      if (!cmdName) { json({ error: `Invalid move action: ${action}` }, 400); return; }
+      const cmdCtx: CommandContext = { db: ctx.db, config: ctx.config, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
+      const result = executeCommand(cmdName, cmdCtx, { targetId });
+      if (result.ok) { json({ ok: true }); } else { json({ error: result.error }, 400); }
     });
     return true;
   }
@@ -67,10 +67,14 @@ export function handleTopicManagementRoutes(routeCtx: ApiRouteContext): boolean 
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/rename$/) && req.method === 'POST') {
     if (!requireCapability('topics.rename', 'You are not allowed to modify topics')) return true;
-    readBody(req).then((body) => {
+    void readJsonBody<{ name?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { name } = body.value;
+      if (!name || typeof name !== 'string') { json({ error: 'name is required' }, 400); return; }
       try {
-        const { name } = JSON.parse(body);
-        if (!name || typeof name !== 'string') { json({ error: 'name is required' }, 400); return; }
         const topicId = parseInt(url.pathname.split('/')[3]);
         renameTopic(ctx.db, topicId, name);
         ctx.broadcastGlobal({ type: 'topics.changed' });

@@ -8,7 +8,7 @@ import {
   searchScopedArtifacts,
   suggestAccessibleFiles,
 } from 'teepee-core';
-import { readBody } from '../utils.js';
+import { readJsonBody } from '../utils.js';
 import type { ApiRouteContext } from './context.js';
 
 export function handleReferenceRoutes(routeCtx: ApiRouteContext): boolean {
@@ -100,49 +100,49 @@ export function handleReferenceRoutes(routeCtx: ApiRouteContext): boolean {
   }
 
   if (url.pathname === '/api/references/resolve' && req.method === 'POST') {
-    readBody(req).then((body) => {
-      try {
-        let { href } = JSON.parse(body);
-        if (!href || typeof href !== 'string') {
-          json({ error: 'href is required' }, 400);
+    void readJsonBody<{ href?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      let { href } = body.value;
+      if (!href || typeof href !== 'string') {
+        json({ error: 'href is required' }, 400);
+        return;
+      }
+
+      const normalized = normalizeLegacyHref(href, ctx.basePath, ctx.config.filesystem.roots);
+      if (normalized) href = normalized;
+
+      const resolved = resolveReference(href, ctx.basePath, ctx.config.filesystem.roots);
+      if (!resolved) {
+        json({ error: 'Cannot resolve reference' }, 404);
+        return;
+      }
+
+      const access = ensureReferenceAccess(resolved);
+      if (!access.ok) {
+        json({ error: access.error }, access.status);
+        return;
+      }
+
+      if (resolved.targetType === 'artifact-document' && resolved.fetch.kind === 'artifact-document') {
+        const artifact = getArtifact(ctx.db, resolved.fetch.artifactId);
+        if (!artifact) {
+          json({ error: 'Artifact not found' }, 404);
           return;
         }
-
-        const normalized = normalizeLegacyHref(href, ctx.basePath, ctx.config.filesystem.roots);
-        if (normalized) href = normalized;
-
-        const resolved = resolveReference(href, ctx.basePath, ctx.config.filesystem.roots);
-        if (!resolved) {
-          json({ error: 'Cannot resolve reference' }, 404);
-          return;
-        }
-
-        const access = ensureReferenceAccess(resolved);
-        if (!access.ok) {
-          json({ error: access.error }, access.status);
-          return;
-        }
-
-        if (resolved.targetType === 'artifact-document' && resolved.fetch.kind === 'artifact-document') {
-          const artifact = getArtifact(ctx.db, resolved.fetch.artifactId);
-          if (!artifact) {
-            json({ error: 'Artifact not found' }, 404);
+        if (resolved.fetch.version !== undefined) {
+          const version = getArtifactVersionByNumber(ctx.db, resolved.fetch.artifactId, resolved.fetch.version);
+          if (!version) {
+            json({ error: `Artifact version v${resolved.fetch.version} not found` }, 404);
             return;
           }
-          if (resolved.fetch.version !== undefined) {
-            const version = getArtifactVersionByNumber(ctx.db, resolved.fetch.artifactId, resolved.fetch.version);
-            if (!version) {
-              json({ error: `Artifact version v${resolved.fetch.version} not found` }, 404);
-              return;
-            }
-          }
-          resolved.displayName = artifact.title;
         }
-
-        json(resolved);
-      } catch (e: any) {
-        json({ error: e.message }, 400);
+        resolved.displayName = artifact.title;
       }
+
+      json(resolved);
     });
     return true;
   }

@@ -10,7 +10,7 @@ import {
   listTopicArtifacts,
   promoteArtifact,
 } from 'teepee-core';
-import { readBody } from '../utils.js';
+import { readJsonBody } from '../utils.js';
 import type { ApiRouteContext } from './context.js';
 
 function buildSiblingTempPath(fullPath: string, label: string): string {
@@ -101,16 +101,13 @@ export function handleArtifactRoutes(routeCtx: ApiRouteContext): boolean {
     const parts = url.pathname.split('/');
     const artifactId = parseInt(parts[3]);
     const versionId = parseInt(parts[5]);
-    readBody(req).then((body) => {
-      let parsedBody: any;
-      try {
-        parsedBody = JSON.parse(body);
-      } catch {
-        json({ error: 'Invalid JSON body' }, 400);
+    void readJsonBody<{ repoPath?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
         return;
       }
 
-      const { repoPath } = parsedBody ?? {};
+      const { repoPath } = body.value ?? {};
       if (!repoPath || typeof repoPath !== 'string') {
         json({ error: 'repoPath is required' }, 400);
         return;

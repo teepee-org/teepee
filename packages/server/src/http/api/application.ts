@@ -13,8 +13,10 @@ import {
 } from 'teepee-core';
 import type { CommandContext, SearchScope, SearchType } from 'teepee-core';
 import { submitUserMessage } from '../../post-message.js';
-import { readBody } from '../utils.js';
+import { readJsonBody } from '../utils.js';
 import type { ApiRouteContext } from './context.js';
+
+const MESSAGE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 export function handleApplicationRoutes(routeCtx: ApiRouteContext): boolean {
   const { ctx, req, url, currentUser, json, requireCapability } = routeCtx;
@@ -37,12 +39,28 @@ export function handleApplicationRoutes(routeCtx: ApiRouteContext): boolean {
 
   if (url.pathname === '/api/topics' && req.method === 'POST') {
     if (!requireCapability('topics.create', 'You are not allowed to create topics')) return true;
-    readBody(req).then((body) => {
-      const { name, parentTopicId } = JSON.parse(body);
-      const id = createTopic(ctx.db, name, parentTopicId ?? null);
-      const topic = getTopic(ctx.db, id);
-      ctx.broadcastGlobal({ type: 'topics.changed' });
-      json(topic ?? { id, name }, 201);
+    void readJsonBody<{ name?: string; parentTopicId?: number | null }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { name, parentTopicId } = body.value;
+      if (typeof name !== 'string') {
+        json({ error: 'name is required' }, 400);
+        return;
+      }
+      if (parentTopicId !== undefined && parentTopicId !== null && typeof parentTopicId !== 'number') {
+        json({ error: 'parentTopicId must be a number or null' }, 400);
+        return;
+      }
+      try {
+        const id = createTopic(ctx.db, name, parentTopicId ?? null);
+        const topic = getTopic(ctx.db, id);
+        ctx.broadcastGlobal({ type: 'topics.changed' });
+        json(topic ?? { id, name }, 201);
+      } catch {
+        json({ error: 'Failed to create topic' }, 400);
+      }
     });
     return true;
   }
@@ -70,19 +88,26 @@ export function handleApplicationRoutes(routeCtx: ApiRouteContext): boolean {
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/messages$/) && req.method === 'POST') {
     if (!requireCapability('messages.post', 'You are not allowed to post messages')) return true;
-    readBody(req).then((body) => {
+    void readJsonBody<{ text?: string; clientMessageId?: string }>(req, { maxBytes: MESSAGE_BODY_MAX_BYTES }).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { text, clientMessageId } = body.value;
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        json({ error: "Field 'text' is required and must be a non-empty string" }, 400);
+        return;
+      }
+      const topicId = parseInt(url.pathname.split('/')[3]);
+      if (!getTopic(ctx.db, topicId)) {
+        json({ error: 'Topic not found' }, 404);
+        return;
+      }
       try {
-        const payload = JSON.parse(body);
-        const { text, clientMessageId } = payload;
-        if (typeof text !== 'string' || text.trim().length === 0) {
-          json({ error: "Field 'text' is required and must be a non-empty string" }, 400);
-          return;
-        }
-        const topicId = parseInt(url.pathname.split('/')[3]);
         const result = submitUserMessage(ctx, topicId, currentUser, text, clientMessageId);
         json(result, 201);
-      } catch (e: any) {
-        json({ error: e.message }, 400);
+      } catch {
+        json({ error: 'Failed to post message' }, 500);
       }
     });
     return true;
@@ -163,8 +188,12 @@ export function handleApplicationRoutes(routeCtx: ApiRouteContext): boolean {
   }
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/language$/) && req.method === 'POST') {
-    readBody(req).then((body) => {
-      const { language } = JSON.parse(body);
+    void readJsonBody<{ language?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { language } = body.value;
       const topicId = parseInt(url.pathname.split('/')[3]);
       const cmdCtx: CommandContext = { db: ctx.db, config: ctx.config, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
       const result = executeCommand('topic.language', cmdCtx, { language });
@@ -174,8 +203,12 @@ export function handleApplicationRoutes(routeCtx: ApiRouteContext): boolean {
   }
 
   if (url.pathname.match(/^\/api\/topics\/\d+\/alias$/) && req.method === 'POST') {
-    readBody(req).then((body) => {
-      const { agent, alias } = JSON.parse(body);
+    void readJsonBody<{ agent?: string; alias?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { agent, alias } = body.value;
       const topicId = parseInt(url.pathname.split('/')[3]);
       const cmdCtx: CommandContext = { db: ctx.db, config: ctx.config, user: currentUser, topicId, broadcast: ctx.broadcast, broadcastGlobal: ctx.broadcastGlobal };
       const result = executeCommand('topic.alias', cmdCtx, { agent, alias });
