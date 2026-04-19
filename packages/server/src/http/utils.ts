@@ -49,12 +49,87 @@ export function jsonResponse(res: http.ServerResponse, data: object, status = 20
   res.end(JSON.stringify(data));
 }
 
-export function readBody(req: http.IncomingMessage): Promise<string> {
+const DEFAULT_BODY_MAX_BYTES = 1024 * 1024;
+
+export interface ReadBodyOptions {
+  maxBytes?: number;
+}
+
+export type ReadBodyResult =
+  | { ok: true; body: string }
+  | { ok: false; status: number; error: string };
+
+export type ReadJsonBodyResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: number; error: string };
+
+export function readBody(req: http.IncomingMessage, options: ReadBodyOptions = {}): Promise<ReadBodyResult> {
   return new Promise((resolve) => {
-    let body = '';
-    req.on('data', (chunk: string) => (body += chunk));
-    req.on('end', () => resolve(body));
+    const maxBytes = Math.max(1, options.maxBytes ?? DEFAULT_BODY_MAX_BYTES);
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let ended = false;
+    let settled = false;
+
+    const cleanup = () => {
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+      req.off('close', onClose);
+    };
+
+    const finish = (result: ReadBodyResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxBytes) {
+        req.resume();
+        finish({ ok: false, status: 413, error: 'Payload too large' });
+        return;
+      }
+      chunks.push(buffer);
+    };
+
+    const onEnd = () => {
+      ended = true;
+      finish({ ok: true, body: Buffer.concat(chunks).toString('utf-8') });
+    };
+
+    const onError = () => {
+      req.resume();
+      finish({ ok: false, status: 400, error: 'Failed to read request body' });
+    };
+
+    const onClose = () => {
+      if (!ended) {
+        finish({ ok: false, status: 400, error: 'Request body stream closed unexpectedly' });
+      }
+    };
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+    req.on('close', onClose);
   });
+}
+
+export async function readJsonBody<T = unknown>(
+  req: http.IncomingMessage,
+  options: ReadBodyOptions = {}
+): Promise<ReadJsonBodyResult<T>> {
+  const body = await readBody(req, options);
+  if (!body.ok) return body;
+  try {
+    return { ok: true, value: JSON.parse(body.body) as T };
+  } catch {
+    return { ok: false, status: 400, error: 'Invalid JSON' };
+  }
 }
 
 export function setSessionCookie(

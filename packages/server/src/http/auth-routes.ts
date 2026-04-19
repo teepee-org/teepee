@@ -14,7 +14,7 @@ import {
   authenticateRequest,
   getClientIp,
   jsonResponse,
-  readBody,
+  readJsonBody,
   setSessionCookie,
   rateLimitAuth,
 } from './utils.js';
@@ -96,31 +96,31 @@ export function handleAuthRoute(
       return true;
     }
     if (!rateLimitAuth(ctx.config, req, res, 'invite:accept')) return true;
-    readBody(req).then((body) => {
-      try {
-        const { token, handle } = JSON.parse(body);
-        const result = acceptInvite(ctx.db, token, handle, undefined,
-          req.headers['user-agent'], getClientIp(ctx.config, req));
-        if (result.ok) {
-          setSessionCookie(ctx.config, req, res, result.sessionId!);
-          json({
-            id: result.user?.id,
-            email: result.user?.email,
-            handle: result.user?.handle,
-            role: result.user?.role,
-            isOwner: isOwnerRole(result.user?.role ?? ''),
-            capabilities: listRoleCapabilities(ctx.config, result.user?.role ?? ''),
-            fileRoots: listAccessibleFilesystemRoots(ctx.config, result.user?.role ?? '').map((root) => ({
-              id: root.id,
-              kind: root.kind,
-              path: root.path,
-            })),
-          });
-        } else {
-          json({ error: result.error }, 400);
-        }
-      } catch (e: any) {
-        json({ error: e.message }, 400);
+    void readJsonBody<{ token?: string; handle?: string }>(req).then((body) => {
+      if (!body.ok) {
+        json({ error: body.error }, body.status);
+        return;
+      }
+      const { token, handle } = body.value;
+      const result = acceptInvite(ctx.db, token ?? '', handle ?? '', undefined,
+        req.headers['user-agent'], getClientIp(ctx.config, req));
+      if (result.ok) {
+        setSessionCookie(ctx.config, req, res, result.sessionId!);
+        json({
+          id: result.user?.id,
+          email: result.user?.email,
+          handle: result.user?.handle,
+          role: result.user?.role,
+          isOwner: isOwnerRole(result.user?.role ?? ''),
+          capabilities: listRoleCapabilities(ctx.config, result.user?.role ?? ''),
+          fileRoots: listAccessibleFilesystemRoots(ctx.config, result.user?.role ?? '').map((root) => ({
+            id: root.id,
+            kind: root.kind,
+            path: root.path,
+          })),
+        });
+      } else {
+        json({ error: result.error }, 400);
       }
     });
     return true;
