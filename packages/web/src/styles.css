@@ -820,6 +820,87 @@ body {
   font-style: italic;
 }
 
+.agent-slot-activity {
+  padding: 6px 12px 0 12px;
+  font-size: 12px;
+  color: var(--accent);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: activity-fade-in 200ms ease-out;
+}
+
+@keyframes activity-fade-in {
+  from { opacity: 0.4; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Continuous "still alive" signal next to the agent name while a job runs */
+.agent-slot-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: live-dot-pulse 1.4s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.5);
+}
+
+@keyframes live-dot-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.5);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 0 0 6px rgba(96, 165, 250, 0);
+  }
+}
+
+/* Blinking caret at the tail of streaming markdown, like a terminal cursor */
+.agent-slot-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  to { visibility: hidden; }
+}
+
+/* Typing-indicator dots in the status label. Each dot fades in/out with a
+   staggered delay so the trio reads as a live, continuously-cycling hint
+   that the agent is still working, even between stream chunks. */
+.typing-dots {
+  display: inline-block;
+  margin-left: 2px;
+  letter-spacing: 1px;
+}
+
+.typing-dots > span {
+  display: inline-block;
+  animation: typing-dot 1.2s ease-in-out infinite;
+  opacity: 0.2;
+}
+
+.typing-dots > span:nth-child(1) { animation-delay: 0s; }
+.typing-dots > span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots > span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-1px); }
+}
+
 .agent-slot-body {
   padding: 12px;
   font-size: 14px;
@@ -3315,4 +3396,27 @@ body {
 
 .toast-dismiss:hover {
   opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-slot-live-dot,
+  .agent-slot-cursor,
+  .typing-dots > span,
+  .agent-thinking .dots,
+  .fs-tree-status .dots,
+  .topic-runtime-indicator-running svg {
+    animation: none;
+  }
+
+  .agent-slot-live-dot,
+  .typing-dots > span,
+  .agent-thinking .dots,
+  .fs-tree-status .dots {
+    opacity: 1;
+    transform: none;
+  }
+
+  .agent-slot-live-dot {
+    box-shadow: none;
+  }
 }

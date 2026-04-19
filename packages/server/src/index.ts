@@ -14,8 +14,15 @@ import {
   Orchestrator,
   ensureOwner,
   runMigrations,
+  collectNonStreamingProviderWarnings,
 } from 'teepee-core';
-import type { OrchestratorCallbacks } from 'teepee-core';
+import type { OrchestratorCallbacks, TeepeeConfig } from 'teepee-core';
+
+function warnNonStreamingProviders(config: TeepeeConfig): void {
+  for (const warning of collectNonStreamingProviderWarnings(config.providers)) {
+    console.warn(warning);
+  }
+}
 import type { ServerContext, ClientState } from './context.js';
 import { handleAuthRoute } from './http/auth-routes.js';
 import { handleApiRoute } from './http/api-routes.js';
@@ -52,6 +59,7 @@ export function startServer(
     }
   }
   const config = loadConfig(configPath);
+  warnNonStreamingProviders(config);
   const teepeeDir = path.dirname(path.resolve(configPath));
   const basePath = path.dirname(teepeeDir);
   const dbPath = path.join(teepeeDir, 'db.sqlite');
@@ -105,6 +113,9 @@ export function startServer(
     onJobRoundStarted(topicId, jobId, agentName, round, phase) {
       broadcast(topicId, { type: 'agent.job.round_started', topicId, jobId, agentName, round, phase });
     },
+    onJobActivity(topicId, jobId, agentName, event) {
+      broadcast(topicId, { type: 'agent.job.activity', topicId, jobId, agentName, event });
+    },
     onJobWaitingInput(topicId, jobId, agentName, request) {
       broadcast(topicId, { type: 'agent.job.waiting_input', topicId, jobId, agentName, request });
     },
@@ -116,8 +127,15 @@ export function startServer(
       const msg = msgs.find((m) => m.id === messageId);
       broadcast(topicId, { type: 'agent.job.completed', topicId, jobId, agentName, message: msg });
     },
-    onJobFailed(topicId, jobId, agentName, error) {
-      broadcast(topicId, { type: 'agent.job.failed', topicId, jobId, agentName, error });
+    onJobFailed(topicId, jobId, agentName, error, options) {
+      broadcast(topicId, {
+        type: 'agent.job.failed',
+        topicId,
+        jobId,
+        agentName,
+        error,
+        ...(options?.timedOut ? { timedOut: true } : {}),
+      });
     },
     onSystemMessage(topicId, messageId, text) {
       const message = getMessageById(db, messageId);

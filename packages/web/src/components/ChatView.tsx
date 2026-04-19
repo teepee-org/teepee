@@ -11,6 +11,15 @@ import type { CommandDef } from '../buildHelpMarkdown';
 import type { PendingInputRequest } from '../api';
 import { parseTeepeeUri } from '../teepee-uri';
 
+interface AgentActivity {
+  kind: 'tool_use' | 'shell' | 'text_delta';
+  tool?: string;
+  target?: string;
+  command?: string;
+  preview?: string;
+  at: number;
+}
+
 interface ActiveJob {
   jobId: number;
   agentName: string;
@@ -19,6 +28,8 @@ interface ActiveJob {
   error?: string;
   phase?: string;
   round?: number;
+  lastActivity?: AgentActivity;
+  timedOut?: boolean;
 }
 
 interface Props {
@@ -212,6 +223,7 @@ export function ChatView({
             streamContent={job.streamContent}
             error={job.error}
             phase={job.phase}
+            lastActivity={job.lastActivity}
             projectPath={projectPath}
             onOpenReference={handleOpenReference}
           />

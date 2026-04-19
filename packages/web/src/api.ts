@@ -249,7 +249,7 @@ export async function fetchMessageArtifacts(messageId: number): Promise<MessageA
   return res.json();
 }
 
-export async function promoteArtifactVersion(artifactId: number, versionId: number, repoPath: string): Promise<{ ok: boolean; repoPath?: string; commitSha?: string; error?: string }> {
+export async function promoteArtifactVersion(artifactId: number, versionId: number, repoPath: string): Promise<{ ok: boolean; repoPath?: string; error?: string }> {
   const res = await fetch(`${BASE}/artifacts/${artifactId}/versions/${versionId}/promote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

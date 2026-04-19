@@ -12,6 +12,7 @@ import { getMessages } from './db/messages.js';
 import { getJob } from './db/jobs.js';
 import { getPendingJobInputRequest, getJobInputRequestById } from './user-input/db.js';
 import type { TeepeeConfig } from './config.js';
+import type { SandboxRunner } from './sandbox/runner.js';
 
 function setupDb(): { db: DatabaseType; tmpDir: string } {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-user-input-test-'));
@@ -35,6 +36,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobStream: [],
     onJobRetrying: [],
     onJobRoundStarted: [],
+    onJobActivity: [],
     onJobWaitingInput: [],
     onJobResumed: [],
     onJobCompleted: [],
@@ -48,6 +50,7 @@ function makeCallbacks(): OrchestratorCallbacks & { calls: Record<string, any[][
     onJobStream: (...args: any[]) => { calls.onJobStream.push(args); },
     onJobRetrying: (...args: any[]) => { calls.onJobRetrying.push(args); },
     onJobRoundStarted: (...args: any[]) => { calls.onJobRoundStarted.push(args); },
+    onJobActivity: (...args: any[]) => { calls.onJobActivity.push(args); },
     onJobWaitingInput: (...args: any[]) => { calls.onJobWaitingInput.push(args); },
     onJobResumed: (...args: any[]) => { calls.onJobResumed.push(args); },
     onJobCompleted: (...args: any[]) => { calls.onJobCompleted.push(args); },
@@ -187,6 +190,50 @@ describe('Orchestrator user-input checkpoints', () => {
 
     expect(getJobInputRequestById(db, request.requestId)?.status).toBe('pending');
     expect((getJob(db, request.jobId) as { status: string }).status).toBe('waiting_input');
+    expect(callbacks.calls.onJobResumed).toHaveLength(0);
+  }, 15000);
+
+  it('applies the same sandbox preflight on resume as on initial start', async () => {
+    // Regression for issue #4: the container-image preflight used to run only on
+    // initial start, letting a resumed job fail later with a less specific
+    // error. Mutating provider/runner state between pause and resume must
+    // produce the same error string as the initial start path.
+    const callbacks = makeCallbacks();
+    const config = makeConfig(`node ${path.basename(writeHumanInputAgent(tmpDir))}`);
+    const orch = new Orchestrator(db, config, tmpDir, callbacks);
+    const topicId = createTopic(db, 'checkpoint');
+    const owner = getUser(db, 'owner@test.com');
+
+    await orch.handleMessage(topicId, 'owner@test.com', 'owner', '@coder procedi');
+    const request = await waitForPendingRequest(db);
+
+    // Simulate the divergence scenario: between pause and resume, the job
+    // transitions to sandbox mode and the runtime switches to the container
+    // backend without the provider defining a sandbox image.
+    db.prepare('UPDATE jobs SET effective_mode = ?, effective_profile = ? WHERE id = ?')
+      .run('sandbox', 'readwrite', request.jobId);
+    const containerStub: SandboxRunner = {
+      name: 'container',
+      isAvailable: () => true,
+      spawn: () => {
+        throw new Error('container runner should not spawn when preflight blocks the job');
+      },
+    };
+    (orch as any).sandboxAvailable = true;
+    (orch as any).sandboxRunner = containerStub;
+    (orch as any).sandboxBackend = 'container';
+
+    await orch.resumeJobFromUserInput(request.requestId, owner!.id, { value: true });
+
+    const job = getJob(db, request.jobId) as { status: string; error: string | null; effective_mode: string | null };
+    expect(job.status).toBe('failed');
+    expect(job.effective_mode).toBe('sandbox');
+    expect(job.error).toBe(
+      `Sandbox backend 'container' requires provider 'human_input' to define providers.human_input.sandbox.image`
+    );
+    expect(callbacks.calls.onJobFailed).toHaveLength(1);
+    // Preflight is fail-closed: the resume must not emit agent.job.resumed or
+    // attempt to spawn the provider when the check rejects the run.
     expect(callbacks.calls.onJobResumed).toHaveLength(0);
   }, 15000);
 

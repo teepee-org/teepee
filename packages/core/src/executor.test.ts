@@ -31,6 +31,41 @@ describe('runAgent', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('kills a silent provider after the idle timeout elapses', async () => {
+    // Use node with a script that stays silent, reads stdin, and sleeps 60s.
+    // The runner should fire idle timeout well before the script would exit.
+    const result = await runAgent({
+      command: 'node -e "process.stdin.resume();setTimeout(()=>{},60000)"',
+      context: 'ignored',
+      cwd: process.cwd(),
+      timeoutMs: 500,
+      killGraceMs: 250,
+      executionMode: 'host',
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.error).toContain('Idle timeout');
+  }, 10_000);
+
+  it('does not time out when the provider emits output within the idle window', async () => {
+    // Script emits a tick every 100ms for ~400ms then exits cleanly. With a
+    // 300ms idle budget, no chunk is ever separated by more than ~100ms, so
+    // the timer is continuously reset and the run completes normally.
+    const result = await runAgent({
+      command:
+        'node -e "const i=setInterval(()=>process.stdout.write(\'.\'),100);setTimeout(()=>{clearInterval(i);process.exit(0)},400)"',
+      context: 'ignored',
+      cwd: process.cwd(),
+      timeoutMs: 300,
+      killGraceMs: 200,
+      executionMode: 'host',
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.output.length).toBeGreaterThan(0);
+  }, 10_000);
+
   it('extracts the final agent message from codex json output', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-codex-json-test-'));
     const scriptPath = path.join(tmpDir, 'codex');
@@ -59,7 +94,7 @@ describe('runAgent', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('does not stream raw codex json events to onChunk', async () => {
+  it('streams parsed text (not raw json) to onChunk for codex', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teepee-codex-stream-test-'));
     const scriptPath = path.join(tmpDir, 'codex');
 
@@ -84,7 +119,10 @@ describe('runAgent', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.output).toBe('final clean answer');
-    expect(chunks).toEqual([]);
+    // Raw NDJSON must never leak into onChunk — only parsed text.
+    expect(chunks.join('')).not.toMatch(/"type":/);
+    expect(chunks.join('')).not.toContain('thread.started');
+    expect(chunks.join('')).toContain('final clean answer');
 
     process.env.PATH = originalPath;
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -4,12 +4,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { WebSocket } from 'ws';
+import { createInviteToken, createUser, openDb } from 'teepee-core';
 import { startServer } from './index.js';
 
 let server: http.Server;
 let close: () => void;
 let port: number;
 let tmpDir: string;
+
+function createInvite(email: string): string {
+  const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
+  createUser(db, email, 'collaborator');
+  const token = createInviteToken(db, email);
+  db.close();
+  return token;
+}
 
 function request(
   method: string,
@@ -72,6 +81,9 @@ teepee:
   name: auth-test
 server:
   auth_rate_limit_max_requests: 2
+  trust_proxy: true
+  cors_allowed_origins:
+    - https://app.example.com
 providers:
   echo:
     command: "cat"
@@ -185,6 +197,53 @@ describe('Auth endpoints remain public', () => {
       Origin: 'https://evil.example.com',
     });
     expect(res.status).toBe(403);
+  });
+
+  it('allows credentialed CORS for allowlisted origin', async () => {
+    const res = await request('GET', '/auth/session', undefined, undefined, {
+      Origin: 'https://app.example.com',
+    });
+    expect(res.status).toBe(401); // not authenticated, but CORS-allowed
+    expect(res.headers['access-control-allow-origin']).toBe('https://app.example.com');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['vary']).toBe('Origin');
+  });
+
+  it('omits Allow-Credentials on same-origin requests', async () => {
+    const res = await request('GET', '/auth/session', undefined, undefined, {
+      Origin: `http://127.0.0.1:${port}`,
+    });
+    expect(res.status).toBe(401);
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+
+  it('preflight OPTIONS for allowlisted origin returns 204 with credentials header', async () => {
+    const res = await request('OPTIONS', '/auth/session', undefined, undefined, {
+      Origin: 'https://app.example.com',
+      'Access-Control-Request-Method': 'GET',
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('https://app.example.com');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['access-control-allow-methods']).toMatch(/GET/);
+  });
+
+  it('sets SameSite=None; Secure on session cookie for HTTPS proxy auth flows', async () => {
+    const token = createInvite('proxy-cookie@test.com');
+    const res = await request('POST', '/auth/invite/accept', {
+      token,
+      handle: 'proxycookie',
+    }, undefined, {
+      'X-Forwarded-Proto': 'https',
+      Origin: 'https://app.example.com',
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers['set-cookie']).toEqual([
+      expect.stringContaining('teepee_session='),
+    ]);
+    expect(String(res.headers['set-cookie'])).toContain('HttpOnly');
+    expect(String(res.headers['set-cookie'])).toContain('SameSite=None');
+    expect(String(res.headers['set-cookie'])).toContain('Secure');
   });
 
   it('Static assets remain accessible', async () => {

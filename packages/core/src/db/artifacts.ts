@@ -629,7 +629,7 @@ export function promoteArtifact(
   db: DatabaseType,
   artifactId: number,
   repoPath: string,
-  commitSha: string
+  commitSha: string | null = null
 ): void {
   db.prepare(
     `UPDATE artifacts SET canonical_source = 'repo', promoted_repo_path = ?, promoted_commit_sha = ?, updated_at = datetime('now') WHERE id = ?`

@@ -12,7 +12,7 @@ security:
       - OPENAI_PROJECT_ID
 providers:
   claude:
-    command: claude -p --permission-mode bypassPermissions --dangerously-skip-permissions
+    command: claude -p --permission-mode bypassPermissions --dangerously-skip-permissions --output-format stream-json --verbose
     timeout_seconds: 90000
   codex:
     command: codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox

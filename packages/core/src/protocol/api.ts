@@ -1,7 +1,10 @@
 import type { MessageRow } from '../db.js';
 import type { JobInputRequestPayload } from '../user-input/db.js';
+import type { AgentAccessProfile, Capability, TeepeeMode } from '../config.js';
 
 // ── API response shapes ──
+
+export type AccessProfile = AgentAccessProfile | 'deny';
 
 export interface TopicResponse {
   id: number;
@@ -52,18 +55,33 @@ export interface StatusResponse {
   clients: number;
 }
 
+export interface SessionFileRoot {
+  id: string;
+  kind: 'workspace' | 'host';
+  path: string;
+}
+
 export interface SessionResponse {
   id: string;
   email: string;
   handle: string | null;
   role: string;
-  isOwner?: boolean;
-  capabilities?: string[];
-  fileRoots?: Array<{
-    id: string;
-    kind: 'workspace' | 'host';
-    path: string;
-  }>;
+  isOwner: boolean;
+  capabilities: Capability[];
+  fileRoots: SessionFileRoot[];
+}
+
+export interface AccessMatrixResponse {
+  roles: string[];
+  assignable_roles: string[];
+  profiles: AccessProfile[];
+  capabilities: Capability[];
+  agents: AgentResponse[];
+  matrix: Record<string, Record<string, AgentAccessProfile>>;
+  role_capabilities: Record<string, Capability[]>;
+  mode: TeepeeMode;
+  source: string;
+  editable: boolean;
 }
 
 export interface InviteLinkResponse {

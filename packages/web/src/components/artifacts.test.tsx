@@ -104,7 +104,7 @@ describe('ArtifactViewer', () => {
       <ArtifactViewer
         artifactId={12}
         versionId={101}
-        isOwner={true}
+        canPromote={true}
         onClose={vi.fn()}
       />
     );
@@ -130,7 +130,7 @@ describe('ArtifactViewer', () => {
         artifactId={12}
         versionId={0}
         versionNumber={999}
-        isOwner={false}
+        canPromote={false}
         onClose={vi.fn()}
       />
     );

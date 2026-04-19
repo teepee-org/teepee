@@ -6,6 +6,7 @@ import type { Database as DatabaseType } from 'better-sqlite3';
 import { parseMentions } from './mentions.js';
 import type { SandboxRunner, SandboxOptions } from './sandbox/runner.js';
 import { prepareCommandParts, isCodexExecCommand, checkSandboxCommandAvailability, buildSandboxCommandMountPlan } from './command.js';
+import { parserForCommand, isClaudeStreamJson, extractClaudeStreamJsonFinal, type StreamEvent } from './stream-parsers.js';
 
 export interface JobResult {
   output: string;
@@ -197,12 +198,24 @@ function formatContextMessageBody(body: string, truncateForArtifactFocus: boolea
 export interface RunAgentOptions {
   command: string;
   context: string;
+  /**
+   * Idle timeout in milliseconds. If no stdout/stderr chunk is received for
+   * this many ms, the runner sends SIGTERM, waits killGraceMs, and then
+   * SIGKILL. A falsy value disables idle-timeout enforcement for this run.
+   */
   timeoutMs?: number;
+  /**
+   * Grace window in ms between SIGTERM and SIGKILL when the idle timeout fires.
+   * Defaults to 5000.
+   */
+  killGraceMs?: number;
   cwd: string;
   executionMode?: ExecutionMode;
   sandboxRunner?: SandboxRunner;
   sandboxOptions?: SandboxOptions;
   onChunk?: (chunk: string) => void;
+  /** Called for each StreamEvent extracted from provider output. */
+  onActivity?: (event: StreamEvent) => void;
   outputDir?: string;
 }
 
@@ -226,6 +239,7 @@ export function runAgent(
   return new Promise((resolve) => {
     const parts = prepareCommandParts(opts.command);
     const isCodexExecJson = isCodexExecCommand(parts);
+    const isClaudeStreamJsonCmd = isClaudeStreamJson(opts.command);
 
     const RUNNABLE_MODES = new Set(['host', 'sandbox']);
     if (opts.executionMode && !RUNNABLE_MODES.has(opts.executionMode)) {
@@ -269,19 +283,108 @@ export function runAgent(
     const resolveOnce = (result: JobResult) => {
       if (settled) return;
       settled = true;
+      clearIdleTimer();
+      clearKillTimer();
       resolve(result);
     };
+
+    // ── Idle timer (SIGTERM → grace → SIGKILL on no-output window) ──
+    const idleBudgetMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
+    const killGraceMs = opts.killGraceMs && opts.killGraceMs > 0 ? opts.killGraceMs : 5000;
+
+    let idleTimer: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+    let timedOut = false;
+
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
+    const onIdle = () => {
+      idleTimer = null;
+      if (settled) return;
+      timedOut = true;
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        /* already dead */
+      }
+      killTimer = setTimeout(() => {
+        killTimer = null;
+        if (settled) return;
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* already dead */
+        }
+      }, killGraceMs);
+    };
+
+    const armIdleTimer = () => {
+      if (idleBudgetMs <= 0) return;
+      clearIdleTimer();
+      idleTimer = setTimeout(onIdle, idleBudgetMs);
+    };
+
+    // ── Stream parsing (activity events + structured text routing) ──
+    // Always build the parser when the provider emits structured (JSON-line)
+    // output: we use it both to extract activity events for the UI indicator
+    // and to lift the assistant text out of the raw JSON so the chat bubble
+    // renders prose instead of the event log.
+    const providerIsStructured = isCodexExecJson || isClaudeStreamJsonCmd;
+    const wantsParser = Boolean(opts.onActivity) || providerIsStructured;
+    const parser = wantsParser ? parserForCommand(opts.command) : null;
+
+    const handleChunk = (chunk: string, stream: 'stdout' | 'stderr') => {
+      armIdleTimer(); // any chunk resets the idle timer
+      if (!parser) return;
+      for (const event of parser.feed(chunk, stream)) {
+        if (providerIsStructured && event.kind === 'text_delta' && event.text) {
+          // Forward the parsed text (not the raw JSON chunk) to the UI.
+          try {
+            opts.onChunk?.(event.text);
+          } catch {
+            /* UI consumer errors must not break the run */
+          }
+        }
+        if (opts.onActivity) {
+          try {
+            opts.onActivity(event);
+          } catch {
+            /* as above */
+          }
+        }
+      }
+    };
+
+    armIdleTimer();
 
     proc.stdout!.on('data', (data: Buffer) => {
       const chunk = data.toString();
       output += chunk;
-      if (!isCodexExecJson) {
+      // Only forward the raw chunk to the UI stream for providers that emit
+      // plain text on stdout. Codex JSON and Claude stream-json are handled
+      // via their parsers (see handleChunk above / extractCodexFinalMessage
+      // / extractClaudeStreamJsonFinal).
+      if (!isCodexExecJson && !isClaudeStreamJsonCmd) {
         opts.onChunk?.(chunk);
       }
+      handleChunk(chunk, 'stdout');
     });
 
     proc.stderr!.on('data', (data: Buffer) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      handleChunk(chunk, 'stderr');
     });
 
     proc.stdin!.on('error', () => {
@@ -289,7 +392,26 @@ export function runAgent(
     });
 
     proc.on('close', (code, signal) => {
-      const normalizedOutput = isCodexExecJson ? extractCodexFinalMessage(output) : output.trim();
+      let normalizedOutput: string;
+      if (isCodexExecJson) {
+        normalizedOutput = extractCodexFinalMessage(output);
+      } else if (isClaudeStreamJsonCmd) {
+        normalizedOutput = extractClaudeStreamJsonFinal(output) ?? output.trim();
+      } else {
+        normalizedOutput = output.trim();
+      }
+      if (timedOut) {
+        const seconds = Math.round(idleBudgetMs / 1000);
+        resolveOnce({
+          output: normalizedOutput,
+          exitCode: code ?? 1,
+          timedOut: true,
+          stderr: stderr.trim(),
+          signal,
+          error: `Idle timeout: no output for ${seconds}s`,
+        });
+        return;
+      }
       resolveOnce({
         output: normalizedOutput,
         exitCode: code ?? 1,

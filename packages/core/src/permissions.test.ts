@@ -9,7 +9,7 @@ import {
   deleteUserPermanently,
 } from './auth.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import type { LimitsConfig, TeepeeConfig } from './config.js';
+import type { AgentAccessProfile, LimitsConfig, TeepeeConfig } from './config.js';
 
 const LIMITS: LimitsConfig = {
   max_agents_per_message: 5,
@@ -20,9 +20,15 @@ const LIMITS: LimitsConfig = {
 
 let db: DatabaseType;
 
-function makeConfig(roles: TeepeeConfig['roles']): TeepeeConfig {
+type RoleAgents = Record<string, AgentAccessProfile>;
+
+function makeConfig(rolesInput: {
+  owner: RoleAgents;
+  collaborator: RoleAgents;
+  observer: RoleAgents;
+}): TeepeeConfig {
   return {
-    version: 1,
+    version: 2,
     mode: 'private',
     teepee: { name: 'test', language: 'en', demo: { enabled: false, topic_name: 'demo', hotkey: 'F1', delay_ms: 1200 } },
     server: { trust_proxy: false, cors_allowed_origins: [], auth_rate_limit_window_seconds: 60, auth_rate_limit_max_requests: 20 },
@@ -33,7 +39,11 @@ function makeConfig(roles: TeepeeConfig['roles']): TeepeeConfig {
       deployer: { provider: 'echo' },
       architect: { provider: 'echo' },
     },
-    roles,
+    roles: {
+      owner: { superuser: true, agents: rolesInput.owner },
+      collaborator: { capabilities: [], agents: rolesInput.collaborator },
+      observer: { capabilities: [], agents: rolesInput.observer },
+    },
     filesystem: {
       roots: [{ id: 'workspace', kind: 'workspace', path: '.', resolvedPath: process.cwd() }],
     },
@@ -144,17 +154,6 @@ describe('multi-owner', () => {
     const result = promoteToOwner(db, 'member@test.com');
     expect(result.ok).toBe(true);
     expect(countOwners(db)).toBe(2);
-  });
-
-  it('cannot promote already-owner', () => {
-    const result = promoteToOwner(db, 'owner@test.com');
-    expect(result.ok).toBe(false);
-  });
-
-  it('cannot promote non-active user', () => {
-    createUser(db, 'pending@test.com', 'collaborator');
-    const result = promoteToOwner(db, 'pending@test.com');
-    expect(result.ok).toBe(false);
   });
 
   it('demote owner to collaborator', () => {

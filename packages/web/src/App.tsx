@@ -19,8 +19,34 @@ import {
 } from './api';
 import type { ProjectInfo, PresenceEntry, PendingInputRequest, TopicJobSnapshot } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
-import type { Capability, MessageSearchResult } from 'teepee-core';
+import type { Capability, MessageSearchResult, SessionResponse } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
+
+interface AgentActivity {
+  kind: 'tool_use' | 'shell' | 'text_delta';
+  tool?: string;
+  target?: string;
+  command?: string;
+  preview?: string;
+  at: number;
+}
+
+export function activityToString(activity: AgentActivity): string {
+  switch (activity.kind) {
+    case 'tool_use': {
+      const tool = activity.tool ?? 'tool';
+      if (!activity.target) return `Using ${tool}`;
+      if (tool === 'Bash') return `Running: ${activity.target}`;
+      if (tool === 'Read') return `Reading ${activity.target}`;
+      if (tool === 'Edit' || tool === 'Write') return `${tool}ing ${activity.target}`;
+      return `${tool}: ${activity.target}`;
+    }
+    case 'shell':
+      return `Running: ${activity.command ?? ''}`.trim();
+    case 'text_delta':
+      return activity.preview ? `"${activity.preview}"` : '';
+  }
+}
 
 interface ActiveJob {
   jobId: number;
@@ -30,16 +56,11 @@ interface ActiveJob {
   error?: string;
   phase?: string;
   round?: number;
+  lastActivity?: AgentActivity;
+  timedOut?: boolean;
 }
 
-interface AuthUser {
-  id: string;
-  email: string;
-  handle: string | null;
-  role: string;
-  isOwner: boolean;
-  capabilities: Capability[];
-}
+type AuthUser = SessionResponse;
 
 interface DemoRunState {
   topicId: number;
@@ -379,10 +400,31 @@ export function App() {
                     error: undefined,
                     phase: event.phase,
                     round: event.round,
+                    lastActivity: undefined,
                   }
                 : j
             );
           });
+          break;
+
+        case 'agent.job.activity':
+          updateTopicJobs(event.topicId, (prev) =>
+            prev.map((j) =>
+              j.jobId === event.jobId
+                ? {
+                    ...j,
+                    lastActivity: {
+                      kind: event.event.kind,
+                      tool: event.event.kind === 'tool_use' ? event.event.tool : undefined,
+                      target: event.event.kind === 'tool_use' ? event.event.target : undefined,
+                      command: event.event.kind === 'shell' ? event.event.command : undefined,
+                      preview: event.event.kind === 'text_delta' ? event.event.preview : undefined,
+                      at: Date.now(),
+                    },
+                  }
+                : j
+            )
+          );
           break;
 
         case 'agent.job.completed':
@@ -464,12 +506,20 @@ export function App() {
           );
           break;
 
-        case 'agent.job.failed':
-          // Remove slot
-          updateTopicJobs(event.topicId, (prev) =>
-            prev.filter((j) => j.jobId !== event.jobId)
-          );
+        case 'agent.job.failed': {
+          // Capture last activity from the slot before removing it so the
+          // system message can surface it alongside an idle-timeout error.
+          let lastActivity: AgentActivity | undefined;
+          updateTopicJobs(event.topicId, (prev) => {
+            const failed = prev.find((j) => j.jobId === event.jobId);
+            lastActivity = failed?.lastActivity;
+            return prev.filter((j) => j.jobId !== event.jobId);
+          });
           if (event.topicId === activeTopicId) {
+            const activityLine = lastActivity ? activityToString(lastActivity) : null;
+            const body = event.timedOut && activityLine
+              ? `**@${event.agentName}** failed: ${event.error}\n\n_Last activity: ${activityLine}_`
+              : `**@${event.agentName}** failed: ${event.error}`;
             setMessages((prev) => [
               ...prev,
               {
@@ -477,12 +527,13 @@ export function App() {
                 topic_id: event.topicId,
                 author_type: 'system' as const,
                 author_name: event.agentName,
-                body: `**@${event.agentName}** failed: ${event.error}`,
+                body,
                 created_at: new Date().toISOString(),
               },
             ]);
           }
           break;
+        }
 
         case 'system':
           if (event.topicId === activeTopicId) {
