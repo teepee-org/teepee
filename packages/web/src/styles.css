@@ -862,21 +862,6 @@ body {
   }
 }
 
-/* Blinking caret at the tail of streaming markdown, like a terminal cursor */
-.agent-slot-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 2px;
-  background: var(--accent);
-  vertical-align: text-bottom;
-  animation: cursor-blink 1s steps(2, start) infinite;
-}
-
-@keyframes cursor-blink {
-  to { visibility: hidden; }
-}
-
 /* Typing-indicator dots in the status label. Each dot fades in/out with a
    staggered delay so the trio reads as a live, continuously-cycling hint
    that the agent is still working, even between stream chunks. */
@@ -899,6 +884,12 @@ body {
 @keyframes typing-dot {
   0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-1px); }
+}
+
+.agent-slot-stream-dots {
+  margin-left: 6px;
+  vertical-align: text-bottom;
+  color: var(--accent);
 }
 
 .agent-slot-body {
@@ -3400,7 +3391,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-slot-live-dot,
-  .agent-slot-cursor,
   .typing-dots > span,
   .agent-thinking .dots,
   .fs-tree-status .dots,

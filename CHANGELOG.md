@@ -2,6 +2,25 @@
 
 This project now keeps a forward-maintained release history here and on GitHub Releases.
 
+## v0.3.1
+
+Fixes
+
+- Added enforced idle-timeout handling for agent providers, plus live stream-activity signals in the UI, closing `#1` and `#8`.
+- Fixed streamed agent output rendering so Claude/Codex prose is surfaced as text instead of raw provider JSON, with stderr isolation and final-text de-duplication in the parser pipeline.
+- Fixed fail-closed execution preflight drift by unifying job start/resume validation under `validateJobRunPreconditions`, closing `#6`.
+- Hardened HTTP body parsing with explicit size caps, invalid-JSON handling, and safer request-stream cleanup, closing `#2`.
+- Fixed the AgentSlot streaming tail so active messages keep the animated typing dots instead of switching to a blinking cursor mid-stream.
+
+Improvements
+
+- Split the server HTTP route monolith into per-domain handler modules under `packages/server/src/http/api/`, keeping the same behavior while making the surface area easier to reason about and maintain.
+- Refreshed the release landing page copy on `teepee.org` to match the current product surface.
+
+Notes
+
+- This is a patch release on top of `v0.3.0`: no new config migration, no package renames, no new publish targets.
+
 ## v0.3.0
 
 Features

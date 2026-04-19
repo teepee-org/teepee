@@ -1,6 +1,6 @@
 {
   "name": "@teepee/web",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "react-markdown": "^9.0.0",
     "rehype-highlight": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "teepee-core": "^0.3.0"
+    "teepee-core": "^0.3.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.0.0",

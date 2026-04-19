@@ -1,6 +1,6 @@
 {
   "name": "teepee-core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Core orchestration and storage primitives for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

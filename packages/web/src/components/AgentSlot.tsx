@@ -86,7 +86,13 @@ export function AgentSlot({ agentName, status, streamContent, error, phase, last
         ) : streamContent ? (
           <>
             <MarkdownRenderer projectPath={projectPath} onOpenReference={onOpenReference}>{streamContent}</MarkdownRenderer>
-            {alive && <span className="agent-slot-cursor" aria-hidden="true" />}
+            {alive && (
+              <span className="typing-dots agent-slot-stream-dots" aria-hidden="true">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
+              </span>
+            )}
           </>
         ) : status === 'queued' || status === 'running' ? (
           <div className="agent-thinking">
