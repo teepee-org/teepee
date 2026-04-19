@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { AccessMatrixResponse, AccessProfile, AgentResponse } from 'teepee-core';
 
 interface User {
   email: string;
@@ -8,25 +9,8 @@ interface User {
   revoked_at?: string | null;
 }
 
-interface Agent {
-  name: string;
-  provider: string;
-}
-
-type AccessProfile = 'deny' | 'readonly' | 'draft' | 'readwrite' | 'trusted';
-
-interface AccessMatrix {
-  roles: string[];
-  assignable_roles: string[];
-  profiles: AccessProfile[];
-  capabilities: string[];
-  agents: Agent[];
-  matrix: Record<string, Record<string, Exclude<AccessProfile, 'deny'>>>;
-  role_capabilities: Record<string, string[]>;
-  mode: 'private' | 'shared';
-  source: string;
-  editable: boolean;
-}
+type Agent = AgentResponse;
+type AccessMatrix = AccessMatrixResponse;
 
 interface Props {
   agents: Agent[];

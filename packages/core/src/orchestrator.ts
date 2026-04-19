@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'crypto';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import type { TeepeeConfig, ExecutionMode, AgentAccessProfile, UserRole } from './config.js';
 import { hasCapability, normalizeConfiguredRole, resolveRoleAgentProfile, resolveTimeout, resolveKillGrace } from './config.js';
@@ -28,7 +29,7 @@ import { parseMentions, resolveAliases } from './mentions.js';
 import { filterAllowedAgents } from './permissions.js';
 import { buildContext, runAgent, type JobResult } from './executor.js';
 import { buildSandboxAuthMountPlan, buildSandboxCommandMountPlan } from './command.js';
-import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
+import { resolveExecutionPolicy, validateJobRunPreconditions } from './execution-policy.js';
 import {
   commitPreparedArtifactIngest,
   formatIngestSummary,
@@ -104,6 +105,7 @@ export class Orchestrator {
   private schedulerNeedsRerun = false;
   private activeWriterChainRootId: number | null = null;
   private runningJobs = new Map<number, Promise<void>>();
+  private readonly outputNamespace: string;
 
   constructor(
     db: DatabaseType,
@@ -116,6 +118,10 @@ export class Orchestrator {
     this.basePath = basePath;
     this.callbacks = callbacks;
     this.knownAgents = new Set(Object.keys(config.agents));
+    this.outputNamespace = createHash('sha1')
+      .update(path.resolve(basePath))
+      .digest('hex')
+      .slice(0, 12);
     const sandbox = detectSandboxAvailability({
       preferredRunner: config.security.sandbox.runner,
     });
@@ -268,6 +274,14 @@ export class Orchestrator {
     const user = getUser(this.db, email);
     if (!user) return '__missing__';
     return normalizeConfiguredRole(user.role);
+  }
+
+  private getJobOutputRoot(jobId: number): string {
+    return path.join(os.tmpdir(), 'teepee', this.outputNamespace, 'jobs', String(jobId));
+  }
+
+  private getJobOutputDir(jobId: number): string {
+    return path.join(this.getJobOutputRoot(jobId), 'out');
   }
 
   private async drainScheduler(): Promise<void> {
@@ -470,37 +484,25 @@ export class Orchestrator {
     const providerConfig = this.config.providers[agentConfig.provider];
     const policy = resolveExecutionPolicy(params.effectiveProfile);
 
-    // Block disabled agents — persist audit metadata even on denial
-    if (params.effectiveMode === 'disabled') {
-      const error = `Agent '${params.agentName}' is disabled: ${policy.reason}`;
-      updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
-      emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
-      this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
+    // Fail-closed preflight — identical checks on initial start and resume
+    const preflightError = validateJobRunPreconditions({
+      agentName: params.agentName,
+      providerName: agentConfig.provider,
+      effectiveMode: params.effectiveMode,
+      policyReason: policy.reason,
+      sandboxAvailable: this.sandboxAvailable,
+      sandboxRunnerName: this.sandboxRunner.name,
+      providerSandboxImage: providerConfig.sandbox?.image,
+    });
+    if (preflightError) {
+      updateJobStatus(this.db, params.jobId, 'failed', { error: preflightError, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
+      emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error: preflightError, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
+      this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, preflightError);
       return;
     }
 
-    // Validate sandbox availability when required — persist audit metadata on fail-closed
-    if (params.effectiveMode === 'sandbox') {
-      const sandboxError = validateSandboxAvailability(params.effectiveMode, this.sandboxAvailable);
-      if (sandboxError) {
-        const error = sandboxError;
-        updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
-        emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
-        this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
-        return;
-      }
-
-      if (this.sandboxRunner.name === 'container' && !providerConfig.sandbox?.image) {
-        const error = `Sandbox backend 'container' requires provider '${agentConfig.provider}' to define providers.${agentConfig.provider}.sandbox.image`;
-        updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
-        emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
-        this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
-        return;
-      }
-    }
-
     // Create per-job output directory
-    const jobOutputDir = path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId), 'out');
+    const jobOutputDir = this.getJobOutputDir(params.jobId);
     fs.mkdirSync(path.join(jobOutputDir, 'files'), { recursive: true });
 
     try {
@@ -579,7 +581,7 @@ export class Orchestrator {
     } catch (error: unknown) {
       this.failJob(params.topicId, params.jobId, params.agentName, `Unexpected orchestrator error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      try { fs.rmSync(path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId)), { recursive: true, force: true }); } catch {}
+      try { fs.rmSync(this.getJobOutputRoot(params.jobId), { recursive: true, force: true }); } catch {}
     }
   }
 
@@ -1275,25 +1277,24 @@ export class Orchestrator {
     const providerConfig = this.config.providers[agentConfig.provider];
     const policy = resolveExecutionPolicy(params.effectiveProfile);
 
-    if (params.effectiveMode === 'disabled') {
-      const error = `Agent '${params.agentName}' is disabled: ${policy.reason}`;
-      updateJobStatus(this.db, params.jobId, 'failed', { error, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
-      emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error }));
-      this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, error);
+    // Fail-closed preflight — identical checks on initial start and resume
+    const preflightError = validateJobRunPreconditions({
+      agentName: params.agentName,
+      providerName: agentConfig.provider,
+      effectiveMode: params.effectiveMode,
+      policyReason: policy.reason,
+      sandboxAvailable: this.sandboxAvailable,
+      sandboxRunnerName: this.sandboxRunner.name,
+      providerSandboxImage: providerConfig.sandbox?.image,
+    });
+    if (preflightError) {
+      updateJobStatus(this.db, params.jobId, 'failed', { error: preflightError, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
+      emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error: preflightError, requested_by: params.userEmail, requester_role: params.requesterRole, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile }));
+      this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, preflightError);
       return;
     }
 
-    if (params.effectiveMode === 'sandbox') {
-      const sandboxError = validateSandboxAvailability(params.effectiveMode, this.sandboxAvailable);
-      if (sandboxError) {
-        updateJobStatus(this.db, params.jobId, 'failed', { error: sandboxError, requested_by_email: params.userEmail, requested_by_user_id: params.requesterUserId ?? undefined, effective_mode: params.effectiveMode, effective_profile: params.effectiveProfile });
-        emitEvent(this.db, 'agent.job.failed', params.topicId, JSON.stringify({ job_id: params.jobId, agent: params.agentName, error: sandboxError }));
-        this.callbacks.onJobFailed(params.topicId, params.jobId, params.agentName, sandboxError);
-        return;
-      }
-    }
-
-    const jobOutputDir = path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId), 'out');
+    const jobOutputDir = this.getJobOutputDir(params.jobId);
     fs.mkdirSync(path.join(jobOutputDir, 'files'), { recursive: true });
 
     try {
@@ -1355,7 +1356,7 @@ export class Orchestrator {
     } catch (error: unknown) {
       this.failJob(params.topicId, params.jobId, params.agentName, `Unexpected resumed-job error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      try { fs.rmSync(path.join(os.tmpdir(), 'teepee', 'jobs', String(params.jobId)), { recursive: true, force: true }); } catch {}
+      try { fs.rmSync(this.getJobOutputRoot(params.jobId), { recursive: true, force: true }); } catch {}
     }
   }
 

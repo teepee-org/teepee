@@ -492,9 +492,9 @@ roles:
     b: readonly
 `);
     const config = loadConfig(file);
-    expect(config.roles.owner).toEqual({ a: 'trusted', b: 'readwrite' });
-    expect(config.roles.collaborator).toEqual({ a: 'readwrite' });
-    expect(config.roles.observer).toEqual({ b: 'readonly' });
+    expect(config.roles.owner.agents).toEqual({ a: 'trusted', b: 'readwrite' });
+    expect(config.roles.collaborator.agents).toEqual({ a: 'readwrite' });
+    expect(config.roles.observer.agents).toEqual({ b: 'readonly' });
   });
 
   it('accepts draft as a valid access profile', () => {
@@ -514,28 +514,12 @@ roles:
     a: draft
 `);
     const config = loadConfig(file);
-    expect(config.roles.collaborator).toEqual({ a: 'draft' });
+    expect(config.roles.collaborator.agents).toEqual({ a: 'draft' });
   });
 
-  it('rejects unknown role names', () => {
+  it('rejects custom role without required capabilities', () => {
     const file = tmpConfig(`
-teepee:
-  name: test
-providers:
-  p:
-    command: "echo"
-agents:
-  a:
-    provider: p
-roles:
-  qa:
-    a: readwrite
-`);
-    expect(() => loadConfig(file)).toThrow("unknown roles key 'qa'");
-  });
-
-  it('rejects unknown role profiles', () => {
-    const file = tmpConfig(`
+version: 2
 teepee:
   name: test
 providers:
@@ -546,9 +530,34 @@ agents:
     provider: p
 roles:
   owner:
-    a: root
+    superuser: true
+    agents:
+      a: trusted
+  qa:
+    agents:
+      a: readwrite
 `);
-    expect(() => loadConfig(file)).toThrow("must be one of: readonly, draft, readwrite, trusted");
+    expect(() => loadConfig(file)).toThrow('roles.qa.capabilities is required');
+  });
+
+  it('rejects unknown role profiles', () => {
+    const file = tmpConfig(`
+version: 2
+teepee:
+  name: test
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+roles:
+  owner:
+    superuser: true
+    agents:
+      a: root
+`);
+    expect(() => loadConfig(file)).toThrow('must be one of: readonly, draft, readwrite, trusted');
   });
 
   it('rejects legacy agent profile when roles are present', () => {
@@ -618,23 +627,6 @@ agents:
     const config = loadConfig(file);
     expect(config.agents.architect.chain_policy).toBe('delegate_with_origin_policy');
     expect(config.agents.coder.chain_policy).toBe('delegate_with_origin_policy');
-  });
-
-  it('normalizes legacy restricted profile into readonly roles when roles are absent', () => {
-    const file = tmpConfig(`
-teepee:
-  name: test
-providers:
-  p:
-    command: "echo"
-agents:
-  helper:
-    provider: p
-    profile: restricted
-`);
-    const config = loadConfig(file);
-    expect(config.roles.owner.helper).toBe('readonly');
-    expect(config.roles.collaborator.helper).toBe('readonly');
   });
 
   it('applies default security config when not specified', () => {

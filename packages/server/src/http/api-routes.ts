@@ -59,7 +59,7 @@ import {
   FileAccessError,
 } from 'teepee-core';
 import type { SearchScope, SearchType, ResolvedReference as CoreResolvedReference } from 'teepee-core';
-import type { SessionUser, CommandContext } from 'teepee-core';
+import type { AccessMatrixResponse, SessionUser, CommandContext } from 'teepee-core';
 import type { ServerContext } from '../context.js';
 import { submitUserMessage } from '../post-message.js';
 import {
@@ -68,6 +68,30 @@ import {
   isBehindHttps,
   getRequestHost,
 } from './utils.js';
+
+function buildSiblingTempPath(fullPath: string, label: string): string {
+  return `${fullPath}.${label}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function rollbackPromotedFile(fullPath: string, previousContent: Buffer | null): void {
+  if (previousContent === null) {
+    try {
+      fs.unlinkSync(fullPath);
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    return;
+  }
+
+  const rollbackPath = buildSiblingTempPath(fullPath, 'rollback');
+  try {
+    fs.writeFileSync(rollbackPath, previousContent);
+    fs.renameSync(rollbackPath, fullPath);
+  } catch (error) {
+    try { fs.unlinkSync(rollbackPath); } catch { /* best-effort cleanup */ }
+    throw error;
+  }
+}
 
 /**
  * Handle /api/* routes. Returns true if matched.
@@ -332,18 +356,19 @@ export function handleApiRoute(
 
   if (url.pathname === '/api/admin/access-matrix' && req.method === 'GET') {
     if (!requireCapability('admin.view')) return true;
-    json({
+    const response: AccessMatrixResponse = {
       roles: configuredRoles,
       assignable_roles: assignableRoles,
       profiles: ['deny', 'readonly', 'draft', 'readwrite', 'trusted'],
-      capabilities: CAPABILITIES,
+      capabilities: [...CAPABILITIES],
       agents: Object.entries(ctx.config.agents).map(([name, a]) => ({ name, provider: a.provider })),
       matrix: Object.fromEntries(configuredRoles.map((role) => [role, ctx.config.roles[role]?.agents ?? {}])),
       role_capabilities: Object.fromEntries(configuredRoles.map((role) => [role, listRoleCapabilities(ctx.config, role)])),
       mode: ctx.config.mode,
       source: '.teepee/config.yaml',
       editable: false,
-    });
+    };
+    json(response);
     return true;
   }
 
@@ -694,44 +719,63 @@ export function handleApiRoute(
     const artifactId = parseInt(parts[3]);
     const versionId = parseInt(parts[5]);
     readBody(req).then((body) => {
+      let parsedBody: any;
       try {
-        const { repoPath } = JSON.parse(body);
-        if (!repoPath || typeof repoPath !== 'string') {
-          json({ error: 'repoPath is required' }, 400);
-          return;
-        }
-        const ALLOWED_PREFIXES = ['doc/', 'docs/', 'spec/'];
-        if (!ALLOWED_PREFIXES.some((p) => repoPath.startsWith(p))) {
-          json({ error: `repoPath must start with one of: ${ALLOWED_PREFIXES.join(', ')}` }, 400);
-          return;
-        }
-        if (repoPath.includes('..')) {
-          json({ error: 'Path traversal not allowed' }, 400);
-          return;
-        }
-        const version = getArtifactVersion(ctx.db, artifactId, versionId);
-        if (!version) { json({ error: 'Version not found' }, 404); return; }
-        const { execFileSync } = require('child_process');
-        const fs = require('fs');
-        const path = require('path');
-        const fullPath = path.join(ctx.basePath, repoPath);
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, version.body, 'utf-8');
-        let commitSha = '';
-        try {
-          const title = getArtifact(ctx.db, artifactId)?.title ?? String(artifactId);
-          execFileSync('git', ['add', '--', repoPath], { cwd: ctx.basePath, encoding: 'utf-8' });
-          execFileSync('git', ['commit', '-m', `Promote artifact: ${title}`], { cwd: ctx.basePath, encoding: 'utf-8' });
-          commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ctx.basePath, encoding: 'utf-8' }).trim();
-        } catch (gitErr: any) {
-          json({ error: `Git commit failed: ${gitErr.message}` }, 500);
-          return;
-        }
-        promoteArtifact(ctx.db, artifactId, repoPath, commitSha);
-        json({ ok: true, repoPath, commitSha });
-      } catch (e: any) {
-        json({ error: e.message }, 400);
+        parsedBody = JSON.parse(body);
+      } catch {
+        json({ error: 'Invalid JSON body' }, 400);
+        return;
       }
+
+      const { repoPath } = parsedBody ?? {};
+      if (!repoPath || typeof repoPath !== 'string') {
+        json({ error: 'repoPath is required' }, 400);
+        return;
+      }
+      const ALLOWED_PREFIXES = ['doc/', 'docs/', 'spec/'];
+      if (!ALLOWED_PREFIXES.some((p) => repoPath.startsWith(p))) {
+        json({ error: `repoPath must start with one of: ${ALLOWED_PREFIXES.join(', ')}` }, 400);
+        return;
+      }
+      if (repoPath.includes('..')) {
+        json({ error: 'Path traversal not allowed' }, 400);
+        return;
+      }
+      const version = getArtifactVersion(ctx.db, artifactId, versionId);
+      if (!version) { json({ error: 'Version not found' }, 404); return; }
+
+      const fullPath = nodePath.join(ctx.basePath, repoPath);
+      const dir = nodePath.dirname(fullPath);
+      const tmpPath = buildSiblingTempPath(fullPath, 'promote');
+      let previousContent: Buffer | null = null;
+
+      try {
+        previousContent = fs.existsSync(fullPath) ? fs.readFileSync(fullPath) : null;
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(tmpPath, version.body, 'utf-8');
+        fs.renameSync(tmpPath, fullPath);
+      } catch (writeErr: any) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+        json({ error: `Failed to write ${repoPath}: ${writeErr.message}` }, 500);
+        return;
+      }
+
+      try {
+        promoteArtifact(ctx.db, artifactId, repoPath, null);
+      } catch (dbErr: any) {
+        try {
+          rollbackPromotedFile(fullPath, previousContent);
+        } catch (rollbackErr: any) {
+          json({
+            error: `Failed to record promoted artifact for ${repoPath}: ${dbErr.message}. Rollback failed: ${rollbackErr.message}`,
+          }, 500);
+          return;
+        }
+        json({ error: `Failed to record promoted artifact for ${repoPath}: ${dbErr.message}` }, 500);
+        return;
+      }
+
+      json({ ok: true, repoPath });
     });
     return true;
   }

@@ -30,8 +30,12 @@ export type {
   ProjectResponse,
   StatusResponse,
   SessionResponse,
+  SessionFileRoot,
   InviteLinkResponse,
   ArtifactResponse,
   ArtifactVersionResponse,
   MessageArtifactResponse,
+  AccessProfile,
+  AccessMatrixResponse,
+  JobInputRequestResponse,
 } from './api.js';

@@ -276,7 +276,7 @@ This is a shared workspace, not a single-user agent console: multiple humans can
 - On localhost without HTTPS, the session cookie is not marked `Secure` — this is fine for local development.
 - For production/public access, **always use HTTPS** via a reverse proxy. Teepee sets the `Secure` cookie flag when it detects `X-Forwarded-Proto: https`.
 - `server.trust_proxy` is `false` by default. Enable it only when Teepee is behind a proxy you control that overwrites `X-Forwarded-*` headers.
-- CORS is same-origin by default. Use `server.cors_allowed_origins` only if you intentionally need cross-origin access.
+- CORS is same-origin by default. Use `server.cors_allowed_origins` only if you intentionally need cross-origin access. Credentialed cross-origin (cookie auth from another origin) requires HTTPS — when both `cors_allowed_origins` is non-empty and the request reaches Teepee over HTTPS, the session cookie is set with `SameSite=None; Secure` and responses include `Access-Control-Allow-Credentials: true`.
 - Public auth endpoints have a basic in-memory rate limit to slow repeated token or owner-secret attempts.
 - The owner secret link is printed to stdout at startup. Treat it like a password — do not share it.
 

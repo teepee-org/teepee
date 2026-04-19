@@ -6,35 +6,9 @@ import {
   DEFAULT_KILL_GRACE_SECONDS,
 } from './config.js';
 import type { TeepeeConfig } from './config.js';
+import { createTestConfig } from './test-utils.js';
 
-/**
- * Build a minimal TeepeeConfig just to exercise the resolve* helpers.
- * We only care about agents/providers shape here.
- */
-function makeConfig(overrides: Partial<TeepeeConfig> = {}): TeepeeConfig {
-  return {
-    version: 2,
-    mode: 'private',
-    teepee: { name: 'test', language: 'en', demo: { enabled: false, topic_name: '', hotkey: '', delay_ms: 0 } },
-    server: {
-      trust_proxy: false,
-      cors_allowed_origins: [],
-      auth_rate_limit_window_seconds: 60,
-      auth_rate_limit_max_requests: 20,
-    },
-    providers: {},
-    agents: {},
-    roles: {},
-    limits: {
-      max_agents_per_message: 5,
-      max_jobs_per_user_per_minute: 10,
-      max_chain_depth: 2,
-      max_total_jobs_per_chain: 10,
-    },
-    security: { sandbox: { runner: 'bubblewrap', empty_home: true, private_tmp: true, forward_env: [] } },
-    ...overrides,
-  } as TeepeeConfig;
-}
+const makeConfig = (overrides: Partial<TeepeeConfig> = {}) => createTestConfig(overrides);
 
 describe('resolveTimeout', () => {
   it('returns the default when neither agent nor provider set timeout_seconds', () => {

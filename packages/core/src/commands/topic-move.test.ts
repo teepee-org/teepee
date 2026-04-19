@@ -4,13 +4,38 @@ import { SCHEMA } from '../db.js';
 import { executeCommand, listCommands } from './registry.js';
 import type { CommandContext } from './types.js';
 import type { Database as DatabaseType } from 'better-sqlite3';
+import { createTestConfig, createTestUser } from '../test-utils.js';
+
+function makeTestConfig() {
+  return createTestConfig({
+    roles: {
+      owner: { superuser: true, agents: { coder: 'trusted' } },
+      collaborator: {
+        capabilities: [
+          'files.workspace.access',
+          'topics.create',
+          'topics.rename',
+          'topics.archive',
+          'topics.restore',
+          'topics.move',
+          'topics.language.set',
+          'messages.post',
+        ],
+        agents: { coder: 'readwrite' },
+      },
+      observer: { capabilities: ['files.workspace.access'], agents: {} },
+    },
+  });
+}
 
 function setup() {
   const db = openDb(':memory:');
   const broadcasts: any[] = [];
+  const config = makeTestConfig();
   const makeCtx = (topicId: number, role = 'owner'): CommandContext => ({
     db,
-    user: { id: 'usr_test', email: 'test@test.com', handle: 'tester', role, status: 'active' },
+    config,
+    user: createTestUser({ role }),
     topicId,
     broadcast: (_tid, evt) => broadcasts.push(evt),
   });

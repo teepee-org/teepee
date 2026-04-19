@@ -52,3 +52,34 @@ export function validateSandboxAvailability(
   }
   return null;
 }
+
+/**
+ * Single source of truth for fail-closed preflight checks that must run
+ * identically at job start and job resume. Returns the first error message, or
+ * null when all checks pass. Add future preflights here so both paths stay in
+ * sync.
+ */
+export function validateJobRunPreconditions(params: {
+  agentName: string;
+  providerName: string;
+  effectiveMode: ExecutionMode;
+  policyReason: string;
+  sandboxAvailable: boolean;
+  sandboxRunnerName: string;
+  providerSandboxImage: string | undefined;
+}): string | null {
+  if (params.effectiveMode === 'disabled') {
+    return `Agent '${params.agentName}' is disabled: ${params.policyReason}`;
+  }
+
+  if (params.effectiveMode === 'sandbox') {
+    const availabilityError = validateSandboxAvailability(params.effectiveMode, params.sandboxAvailable);
+    if (availabilityError) return availabilityError;
+
+    if (params.sandboxRunnerName === 'container' && !params.providerSandboxImage) {
+      return `Sandbox backend 'container' requires provider '${params.providerName}' to define providers.${params.providerName}.sandbox.image`;
+    }
+  }
+
+  return null;
+}

@@ -3397,3 +3397,26 @@ body {
 .toast-dismiss:hover {
   opacity: 0.7;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-slot-live-dot,
+  .agent-slot-cursor,
+  .typing-dots > span,
+  .agent-thinking .dots,
+  .fs-tree-status .dots,
+  .topic-runtime-indicator-running svg {
+    animation: none;
+  }
+
+  .agent-slot-live-dot,
+  .typing-dots > span,
+  .agent-thinking .dots,
+  .fs-tree-status .dots {
+    opacity: 1;
+    transform: none;
+  }
+
+  .agent-slot-live-dot {
+    box-shadow: none;
+  }
+}

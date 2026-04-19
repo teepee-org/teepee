@@ -19,7 +19,7 @@ import {
 } from './api';
 import type { ProjectInfo, PresenceEntry, PendingInputRequest, TopicJobSnapshot } from './api';
 import type { Topic, Agent, Message, ServerEvent } from './types';
-import type { Capability, MessageSearchResult } from 'teepee-core';
+import type { Capability, MessageSearchResult, SessionResponse } from 'teepee-core';
 import { buildHelpMarkdown, COMMANDS } from './buildHelpMarkdown';
 
 interface AgentActivity {
@@ -60,14 +60,7 @@ interface ActiveJob {
   timedOut?: boolean;
 }
 
-interface AuthUser {
-  id: string;
-  email: string;
-  handle: string | null;
-  role: string;
-  isOwner: boolean;
-  capabilities: Capability[];
-}
+type AuthUser = SessionResponse;
 
 interface DemoRunState {
   topicId: number;

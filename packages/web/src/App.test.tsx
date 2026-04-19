@@ -6,7 +6,15 @@ import { App } from './App';
 Element.prototype.scrollIntoView = vi.fn();
 
 // Mock fetch to simulate authenticated owner with topics/agents
-const MOCK_SESSION = { email: 'owner@localhost', handle: 'owner', role: 'owner', status: 'active' };
+const MOCK_SESSION = {
+  id: 'usr_owner',
+  email: 'owner@localhost',
+  handle: 'owner',
+  role: 'owner',
+  isOwner: true,
+  capabilities: ['admin.view', 'artifacts.promote', 'messages.post', 'topics.create'],
+  fileRoots: [{ id: 'workspace', kind: 'workspace', path: '/tmp' }],
+};
 const MOCK_TOPICS = [
   { id: 1, name: 'test-topic', language: null, parent_topic_id: null, sort_order: 1, archived: 0, archived_at: null },
 ];

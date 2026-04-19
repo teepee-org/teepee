@@ -64,8 +64,13 @@ export function setSessionCookie(
   sessionId: string
 ) {
   const maxAge = 30 * 24 * 60 * 60;
-  const secure = isBehindHttps(config, req) ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `teepee_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`);
+  const https = isBehindHttps(config, req);
+  // SameSite=None requires Secure; only use it when both HTTPS and an explicit
+  // cross-origin allowlist are configured. Otherwise fall back to Lax.
+  const crossOrigin = https && config.server.cors_allowed_origins.length > 0;
+  const sameSite = crossOrigin ? 'None' : 'Lax';
+  const secure = https ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `teepee_session=${sessionId}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`);
 }
 
 // ── CORS ──
@@ -77,12 +82,18 @@ export function getRequestOrigin(config: TeepeeConfig, req: http.IncomingMessage
 export function applyCors(config: TeepeeConfig, req: http.IncomingMessage, res: http.ServerResponse, port: number): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
-  const allowed = origin === getRequestOrigin(config, req, port) || config.server.cors_allowed_origins.includes(origin);
-  if (!allowed) return false;
+  const sameOrigin = origin === getRequestOrigin(config, req, port);
+  const allowlisted = config.server.cors_allowed_origins.includes(origin);
+  if (!sameOrigin && !allowlisted) return false;
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // Cookie auth requires Allow-Credentials on cross-origin responses. Skip on
+  // same-origin where the header is unnecessary and could surprise operators.
+  if (!sameOrigin && allowlisted) {
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   return true;
 }
 

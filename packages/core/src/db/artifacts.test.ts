@@ -201,13 +201,21 @@ describe('listTopicArtifactContext', () => {
 });
 
 describe('promoteArtifact', () => {
-  it('updates canonical_source and promoted fields', () => {
+  it('defaults promoted_commit_sha to null when no sha is provided', () => {
     const { artifact } = createDocumentArtifact(db, { topicId: 1, kind: 'plan', title: 'Plan', body: 'body' });
-    promoteArtifact(db, artifact.id, 'docs/plan.md', 'abc123');
+    promoteArtifact(db, artifact.id, 'docs/plan.md');
 
     const updated = getArtifact(db, artifact.id)!;
     expect(updated.canonical_source).toBe('repo');
     expect(updated.promoted_repo_path).toBe('docs/plan.md');
+    expect(updated.promoted_commit_sha).toBeNull();
+  });
+
+  it('records promoted_commit_sha when provided', () => {
+    const { artifact } = createDocumentArtifact(db, { topicId: 1, kind: 'plan', title: 'Plan', body: 'body' });
+    promoteArtifact(db, artifact.id, 'docs/plan.md', 'abc123');
+
+    const updated = getArtifact(db, artifact.id)!;
     expect(updated.promoted_commit_sha).toBe('abc123');
   });
 });

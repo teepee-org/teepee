@@ -180,7 +180,7 @@ describe('artifact API routes', () => {
     ]);
   });
 
-  it('keeps promote owner-only and records repo metadata on success', async () => {
+  it('keeps promote owner-only and writes to repo without touching git history', async () => {
     const denied = await request(
       port,
       'POST',
@@ -190,6 +190,13 @@ describe('artifact API routes', () => {
     );
     expect(denied.status).toBe(403);
 
+    const countCommits = () =>
+      execFileSync('git', ['rev-list', '--all', '--count'], {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+      }).trim();
+    const commitsBefore = countCommits();
+
     const promoted = await request(
       port,
       'POST',
@@ -198,15 +205,65 @@ describe('artifact API routes', () => {
       { repoPath: 'docs/queue-ui-rollout.md' }
     );
     expect(promoted.status).toBe(200);
-    expect(promoted.body.ok).toBe(true);
+    expect(promoted.body).toEqual({ ok: true, repoPath: 'docs/queue-ui-rollout.md' });
     expect(fs.readFileSync(path.join(tmpDir, 'docs/queue-ui-rollout.md'), 'utf-8')).toBe('# Queue UI rollout');
+    expect(countCommits()).toBe(commitsBefore);
 
     const db = openDb(path.join(tmpDir, '.teepee', 'db.sqlite'));
     const artifact = getArtifact(db, artifactId)!;
     db.close();
     expect(artifact.canonical_source).toBe('repo');
     expect(artifact.promoted_repo_path).toBe('docs/queue-ui-rollout.md');
-    expect(artifact.promoted_commit_sha).toBe(promoted.body.commitSha);
+    expect(artifact.promoted_commit_sha).toBeNull();
+  });
+
+  it('rolls back the repo file when promote metadata persistence fails', async () => {
+    const dbPath = path.join(tmpDir, '.teepee', 'db.sqlite');
+    const repoPath = 'docs/rollout-notes.md';
+    const fullPath = path.join(tmpDir, repoPath);
+    const originalBody = fs.readFileSync(fullPath, 'utf-8');
+
+    const setupDb = openDb(dbPath);
+    const { artifact, version } = createDocumentArtifact(setupDb, {
+      topicId: 1,
+      kind: 'spec',
+      title: 'Rollback check',
+      body: '# Replacement body\n',
+    });
+    const triggerName = 'block_promote_artifact_update';
+    setupDb.exec(`
+      CREATE TRIGGER ${triggerName}
+      BEFORE UPDATE OF canonical_source, promoted_repo_path, promoted_commit_sha ON artifacts
+      BEGIN
+        SELECT RAISE(FAIL, 'blocked promote');
+      END;
+    `);
+    setupDb.close();
+
+    try {
+      const promoted = await request(
+        port,
+        'POST',
+        `/api/artifacts/${artifact.id}/versions/${version.id}/promote`,
+        ownerCookie,
+        { repoPath }
+      );
+
+      expect(promoted.status).toBe(500);
+      expect(promoted.body.error).toContain('blocked promote');
+      expect(fs.readFileSync(fullPath, 'utf-8')).toBe(originalBody);
+
+      const verifyDb = openDb(dbPath);
+      const updated = getArtifact(verifyDb, artifact.id)!;
+      verifyDb.close();
+      expect(updated.canonical_source).toBe('db');
+      expect(updated.promoted_repo_path).toBeNull();
+      expect(updated.promoted_commit_sha).toBeNull();
+    } finally {
+      const cleanupDb = openDb(dbPath);
+      cleanupDb.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
+      cleanupDb.close();
+    }
   });
 
   it('rejects artifact versioned references when the requested version does not exist', async () => {

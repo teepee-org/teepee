@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveExecutionPolicy, validateSandboxAvailability } from './execution-policy.js';
+import { resolveExecutionPolicy, validateSandboxAvailability, validateJobRunPreconditions } from './execution-policy.js';
 
 describe('resolveExecutionPolicy', () => {
   it('denies missing role-agent mapping', () => {
@@ -69,5 +69,75 @@ describe('validateSandboxAvailability', () => {
 
   it('returns null for disabled mode', () => {
     expect(validateSandboxAvailability('disabled', false)).toBeNull();
+  });
+});
+
+describe('validateJobRunPreconditions', () => {
+  const baseParams = {
+    agentName: 'coder',
+    providerName: 'claude',
+    policyReason: 'profile readwrite',
+    sandboxAvailable: true,
+    sandboxRunnerName: 'bubblewrap',
+    providerSandboxImage: undefined as string | undefined,
+  };
+
+  it('rejects disabled mode with the agent name and policy reason', () => {
+    const error = validateJobRunPreconditions({
+      ...baseParams,
+      effectiveMode: 'disabled',
+      policyReason: 'agent is not mapped for the requester role',
+    });
+    expect(error).toBe(`Agent 'coder' is disabled: agent is not mapped for the requester role`);
+  });
+
+  it('rejects sandbox mode when sandbox is unavailable', () => {
+    const error = validateJobRunPreconditions({
+      ...baseParams,
+      effectiveMode: 'sandbox',
+      sandboxAvailable: false,
+    });
+    expect(error).toContain('Sandbox required but not available');
+  });
+
+  it('rejects container backend when provider sandbox image is missing', () => {
+    const error = validateJobRunPreconditions({
+      ...baseParams,
+      effectiveMode: 'sandbox',
+      sandboxRunnerName: 'container',
+      providerSandboxImage: undefined,
+    });
+    expect(error).toBe(
+      `Sandbox backend 'container' requires provider 'claude' to define providers.claude.sandbox.image`
+    );
+  });
+
+  it('accepts container backend when provider sandbox image is set', () => {
+    const error = validateJobRunPreconditions({
+      ...baseParams,
+      effectiveMode: 'sandbox',
+      sandboxRunnerName: 'container',
+      providerSandboxImage: 'ghcr.io/example/agent:1',
+    });
+    expect(error).toBeNull();
+  });
+
+  it('ignores container/image check outside sandbox mode', () => {
+    const error = validateJobRunPreconditions({
+      ...baseParams,
+      effectiveMode: 'host',
+      sandboxRunnerName: 'container',
+      providerSandboxImage: undefined,
+    });
+    expect(error).toBeNull();
+  });
+
+  it('returns null when all preconditions pass on a bubblewrap sandbox', () => {
+    expect(
+      validateJobRunPreconditions({
+        ...baseParams,
+        effectiveMode: 'sandbox',
+      })
+    ).toBeNull();
   });
 });

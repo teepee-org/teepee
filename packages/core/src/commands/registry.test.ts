@@ -2,6 +2,29 @@ import { describe, it, expect, vi } from 'vitest';
 import { openDb, createTopic } from '../db.js';
 import { executeCommand, getCommand, listCommands } from './registry.js';
 import type { CommandContext } from './types.js';
+import { createTestConfig, createTestUser } from '../test-utils.js';
+
+function makeTestConfig() {
+  return createTestConfig({
+    roles: {
+      owner: { superuser: true, agents: { coder: 'trusted' } },
+      collaborator: {
+        capabilities: [
+          'files.workspace.access',
+          'topics.create',
+          'topics.rename',
+          'topics.archive',
+          'topics.restore',
+          'topics.move',
+          'topics.language.set',
+          'messages.post',
+        ],
+        agents: { coder: 'readwrite' },
+      },
+      observer: { capabilities: ['files.workspace.access'], agents: {} },
+    },
+  });
+}
 
 function makeCtx(role: string = 'owner', topicId: number = 1): { ctx: CommandContext; broadcasts: any[] } {
   const db = openDb(':memory:');
@@ -9,7 +32,8 @@ function makeCtx(role: string = 'owner', topicId: number = 1): { ctx: CommandCon
   const broadcasts: any[] = [];
   const ctx: CommandContext = {
     db,
-    user: { id: 'usr_test', email: 'test@test.com', handle: 'tester', role, status: 'active' },
+    config: makeTestConfig(),
+    user: createTestUser({ role }),
     topicId,
     broadcast: (_tid, evt) => broadcasts.push(evt),
   };
@@ -91,6 +115,6 @@ describe('topic.alias', () => {
     const { ctx } = makeCtx('collaborator');
     const result = executeCommand('topic.alias', ctx, { agent: 'coder', alias: 'c' });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('Owner only');
+    expect(result.error).toContain('Insufficient permissions');
   });
 });
