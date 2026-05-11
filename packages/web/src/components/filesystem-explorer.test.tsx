@@ -227,6 +227,28 @@ describe('FilesystemExplorer — conflict dialog', () => {
   });
 });
 
+describe('FilesystemExplorer — fs.invalidated broadcast', () => {
+  it('refetches a directory when teepee:fs-invalidated fires for it', async () => {
+    const calls = installFetchMock(defaultResponder);
+    renderExplorer();
+    await waitFor(() => expect(screen.getByText('workspace')).toBeTruthy());
+
+    const initialEntriesCalls = calls.filter((c) => c.url.startsWith('/api/fs/entries')).length;
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('teepee:fs-invalidated', {
+          detail: { rootId: 'workspace', path: '' },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      const after = calls.filter((c) => c.url.startsWith('/api/fs/entries')).length;
+      expect(after).toBeGreaterThan(initialEntriesCalls);
+    });
+  });
+});
+
 describe('FilesystemExplorer — new folder', () => {
   it('creates a new folder via POST /api/fs/mkdir and notifies on success', async () => {
     const calls = installFetchMock((url, init) => {

@@ -400,8 +400,8 @@ export function handleFilesystemRoutes(routeCtx: ApiRouteContext): boolean {
         settled = true;
         try {
           ctx.broadcastGlobal({
-            kind: 'fs:invalidate',
-            root: rootId,
+            type: 'fs.invalidated',
+            rootId,
             path: parentTarget.relativePath === '.' ? '' : parentTarget.relativePath,
           });
         } catch { /* broadcasting must never break the response */ }
@@ -497,8 +497,8 @@ export function handleFilesystemRoutes(routeCtx: ApiRouteContext): boolean {
       }
       try {
         ctx.broadcastGlobal({
-          kind: 'fs:invalidate',
-          root: rootId,
+          type: 'fs.invalidated',
+          rootId,
           path: parentTarget.relativePath === '.' ? '' : parentTarget.relativePath,
         });
       } catch { /* broadcasting must never break the response */ }

@@ -167,6 +167,13 @@ export interface ErrorEvent {
   message: string;
 }
 
+export interface FsInvalidatedEvent {
+  type: 'fs.invalidated';
+  rootId: string;
+  /** Directory path relative to the root; '' for the root itself. */
+  path: string;
+}
+
 export type ServerEvent =
   | TopicHistoryEvent
   | MessageCreatedEvent
@@ -187,6 +194,7 @@ export type ServerEvent =
   | PresenceChangedEvent
   | ArtifactCreatedEvent
   | ArtifactUpdatedEvent
+  | FsInvalidatedEvent
   | ErrorEvent;
 
 // ── Client → Server events ──

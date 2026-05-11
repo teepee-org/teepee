@@ -560,6 +560,14 @@ export function App() {
           setPresence((event as any).presence);
           break;
 
+        case 'fs.invalidated':
+          window.dispatchEvent(
+            new CustomEvent('teepee:fs-invalidated', {
+              detail: { rootId: event.rootId, path: event.path },
+            }),
+          );
+          break;
+
       }
     },
     [activeTopicId, updateTopicInputRequests, updateTopicJobs]
