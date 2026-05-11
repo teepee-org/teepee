@@ -409,3 +409,82 @@ export async function fetchFsEntries(
   }
   return res.json();
 }
+
+export interface FsUploadResult {
+  ok: true;
+  root: string;
+  path: string;
+  name: string;
+  size: number;
+  renamed: boolean;
+}
+
+export type FsUploadOutcome =
+  | { kind: 'ok'; result: FsUploadResult }
+  | { kind: 'conflict'; suggestedName: string; status: number }
+  | { kind: 'error'; status: number; error: string };
+
+export type FsConflictPolicy = 'fail' | 'rename' | 'overwrite';
+
+export async function uploadFsFile(params: {
+  rootId: string;
+  dirPath: string;
+  filename: string;
+  body: Blob | File | ArrayBuffer | Uint8Array;
+  onConflict?: FsConflictPolicy;
+  signal?: AbortSignal;
+}): Promise<FsUploadOutcome> {
+  const query = new URLSearchParams({
+    root: params.rootId,
+    path: params.dirPath || '.',
+    filename: params.filename,
+  });
+  if (params.onConflict) query.set('on_conflict', params.onConflict);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/fs/upload?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: params.body as BodyInit,
+      signal: params.signal,
+    });
+  } catch (err: any) {
+    return { kind: 'error', status: 0, error: err?.message ?? 'Network error' };
+  }
+
+  if (res.ok) {
+    const result = (await res.json()) as FsUploadResult;
+    return { kind: 'ok', result };
+  }
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 409 && typeof data?.suggestedName === 'string') {
+    return { kind: 'conflict', suggestedName: data.suggestedName, status: res.status };
+  }
+  return {
+    kind: 'error',
+    status: res.status,
+    error: data?.error || `HTTP ${res.status}`,
+  };
+}
+
+export async function createFsDirectory(params: {
+  rootId: string;
+  dirPath: string;
+  name: string;
+}): Promise<{ ok: true; root: string; path: string; name: string }> {
+  const res = await fetch(`${BASE}/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      root: params.rootId,
+      path: params.dirPath || '.',
+      name: params.name,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to create directory' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
