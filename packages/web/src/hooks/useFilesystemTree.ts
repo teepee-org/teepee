@@ -28,6 +28,8 @@ export function nodeKey(rootId: string, path: string): string {
   return `${rootId}:${path}`;
 }
 
+export const FS_INVALIDATED_EVENT = 'teepee:fs-invalidated';
+
 export function useFilesystemTree() {
   const [roots, setRoots] = useState<FilesystemRootInfo[]>([]);
   const [rootsLoading, setRootsLoading] = useState(true);
@@ -127,6 +129,17 @@ export function useFilesystemTree() {
     },
     [loadChildren]
   );
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ rootId: string; path: string }>).detail;
+      if (!detail || typeof detail.rootId !== 'string') return;
+      const normalizedPath = typeof detail.path === 'string' ? detail.path : '';
+      loadChildren(detail.rootId, normalizedPath || '.', true);
+    };
+    window.addEventListener(FS_INVALIDATED_EVENT, handler);
+    return () => window.removeEventListener(FS_INVALIDATED_EVENT, handler);
+  }, [loadChildren]);
 
   const isExpanded = useCallback(
     (rootId: string, path: string) => expandedKeys.has(nodeKey(rootId, path)),
