@@ -1106,6 +1106,7 @@ export function App() {
           selection={fileSelection}
           onSelect={setFileSelection}
           onNotify={notify}
+          isOwner={!!authUser?.isOwner}
         />
       );
     }

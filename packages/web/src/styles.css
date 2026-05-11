@@ -3154,6 +3154,166 @@ body {
   background: rgba(96, 165, 250, 0.18);
 }
 
+/* ── FS Explorer — owner write affordances ──────────────────────────────── */
+
+.fs-explorer-actions {
+  position: relative;
+}
+
+.fs-explorer-add {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fs-explorer-add:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.fs-explorer-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fs-add-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 100;
+}
+
+.fs-explorer-tree-wrapper {
+  position: relative;
+}
+
+.fs-explorer-drag-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: rgba(83, 193, 222, 0.06);
+}
+
+.fs-dropzone-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 52, 96, 0.55);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.fs-dropzone-message {
+  background: var(--bg-elevated, #1f1f2a);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.fs-new-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin: 4px 8px;
+  background: var(--bg-elevated, #1f1f2a);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.fs-new-folder-prefix {
+  color: var(--text-muted);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+
+.fs-new-folder input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.fs-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.fs-modal {
+  background: var(--bg-elevated, #1f1f2a);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  padding: 20px 24px;
+  max-width: 480px;
+  width: calc(100% - 32px);
+  color: var(--text-primary);
+}
+
+.fs-modal h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.fs-modal p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.fs-modal code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.fs-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.fs-modal-actions button {
+  background: var(--bg-input, #1a1a2e);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fs-modal-actions button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fs-modal-actions button[autofocus],
+.fs-modal-actions button:focus-visible {
+  border-color: var(--accent);
+}
+
 /* ── File Preview ───────────────────────────────────────────────────────── */
 
 .file-preview {

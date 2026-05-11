@@ -10,14 +10,16 @@ export interface FileSelection {
   type: 'root' | 'directory' | 'file';
 }
 
+export type FilesystemTree = ReturnType<typeof useFilesystemTree>;
+
 interface Props {
   selected: FileSelection | null;
   onSelect: (selection: FileSelection) => void;
   onContextMenu?: (selection: FileSelection, event: React.MouseEvent) => void;
+  tree: FilesystemTree;
 }
 
-export function FileTree({ selected, onSelect, onContextMenu }: Props) {
-  const tree = useFilesystemTree();
+export function FileTree({ selected, onSelect, onContextMenu, tree }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   if (tree.rootsLoading) {
