@@ -2,6 +2,18 @@
 
 This project now keeps a forward-maintained release history here and on GitHub Releases.
 
+## v0.3.2
+
+Features
+
+- Added owner-only filesystem write endpoints: `POST /api/fs/upload` (streaming `application/octet-stream`, atomic via `.partial` + rename, 25 MB cap, `on_conflict=fail|rename|overwrite` with auto-suggested name on 409) and `POST /api/fs/mkdir`. Both reuse `resolveFileTarget` for traversal/symlink/host-blocklist guards and sanitize the basename (rejects empty, `.`, `..`, slashes, backslashes, control chars, NUL bytes, length > 255).
+- Surfaced the write endpoints in the Files sidebar for owners with a `+ Add` menu (file picker, new folder), drag-and-drop with a dropzone overlay naming the resolved target directory, paste-to-upload from the clipboard, and a conflict dialog (Keep both / Replace / Skip; Escape maps to Skip) that is reused per file across multi-file uploads.
+- Added `fs.invalidated` to the `ServerEvent` protocol; the server broadcasts after successful upload/mkdir and the web client refetches the affected directory automatically, giving multi-tab and multi-client coherence.
+
+Notes
+
+- This is a patch release on top of `v0.3.1`: no new config migration, no package renames, no new publish targets.
+
 ## v0.3.1
 
 Fixes
