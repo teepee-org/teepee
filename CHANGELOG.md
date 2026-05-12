@@ -2,6 +2,16 @@
 
 This project now keeps a forward-maintained release history here and on GitHub Releases.
 
+## v0.3.4
+
+Fixes
+
+- Restored readable contrast on the agent input-request card (`.job-input-card`). The card was styled as a warm cream surface to stand out against the dark UI, but the inner text elements (prompt, meta, form labels, inputs, error/readonly notices) had no explicit `color`, so they inherited the page's light-on-dark `--text-primary` and rendered near-invisible. Each element now carries its intended dark slate/sage palette. Two broken CSS variable references (`var(--muted)`, `var(--surface)`) that never resolved were replaced with the concrete sage tones the design used elsewhere.
+
+Notes
+
+- Pure CSS fix; no behavior, schema, or API changes. Patch release on top of `v0.3.3`.
+
 ## v0.3.3
 
 Breaking change

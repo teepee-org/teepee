@@ -2833,6 +2833,15 @@ body {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(244, 247, 242, 0.96));
+  color: #1c2e26;
+}
+
+.job-input-card strong {
+  color: #14342b;
+}
+
+.job-input-card a {
+  color: #14342b;
 }
 
 .job-input-header {
@@ -2856,17 +2865,23 @@ body {
   display: flex;
   gap: 12px;
   font-size: 12px;
-  color: var(--muted);
+  color: #5a6b62;
   margin-bottom: 8px;
 }
 
 .job-input-prompt {
   margin: 0 0 12px;
+  color: #1c2e26;
 }
 
 .job-input-form {
   display: grid;
   gap: 10px;
+}
+
+.job-input-form label {
+  color: #1c2e26;
+  font-size: 13px;
 }
 
 .job-input-form input[type="text"],
@@ -2877,12 +2892,27 @@ body {
   border-radius: 10px;
   padding: 10px 12px;
   background: #fffdf8;
+  color: #1c2e26;
+  font: inherit;
+}
+
+.job-input-form input[type="text"]::placeholder,
+.job-input-form textarea::placeholder {
+  color: #8a9b91;
+}
+
+.job-input-form input[type="text"]:focus,
+.job-input-form select:focus,
+.job-input-form textarea:focus {
+  outline: none;
+  border-color: #14342b;
 }
 
 .job-input-options,
 .job-input-confirm {
   display: grid;
   gap: 8px;
+  color: #1c2e26;
 }
 
 .job-input-submit,
@@ -2893,6 +2923,12 @@ body {
   border: 1px solid rgba(15, 23, 42, 0.14);
   background: #14342b;
   color: #f7f4eb;
+  cursor: pointer;
+}
+
+.job-input-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .job-input-cancel {
@@ -2901,10 +2937,14 @@ body {
   color: #14342b;
 }
 
-.job-input-readonly,
+.job-input-readonly {
+  font-size: 13px;
+  color: #5a6b62;
+}
+
 .job-input-error {
   font-size: 13px;
-  color: var(--muted);
+  color: #8a2727;
 }
 
 /* ── File Selector Dropdown ── */
