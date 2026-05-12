@@ -100,6 +100,12 @@ export interface FilesystemRootConfig {
 }
 
 export interface FilesystemConfig {
+  /**
+   * When false (the default), the implicit `host` root (kind: 'host', path: '/')
+   * is not registered, even for the owner. Set to true in `.teepee/config.yaml`
+   * under `filesystem.allow_host_root` to opt in.
+   */
+  allow_host_root: boolean;
   roots: FilesystemRootConfig[];
 }
 
@@ -180,13 +186,24 @@ const DEFAULT_LIMITS: LimitsConfig = {
   max_total_jobs_per_chain: 10,
 };
 
-function buildFilesystemConfig(projectRoot: string): FilesystemConfig {
-  return {
-    roots: [
-      { id: 'workspace', kind: 'workspace', path: '.', resolvedPath: path.resolve(projectRoot, '.') },
-      { id: 'host', kind: 'host', path: '/', resolvedPath: '/' },
-    ],
-  };
+function parseAllowHostRoot(rawFilesystem: unknown): boolean {
+  if (typeof rawFilesystem !== 'object' || rawFilesystem === null) return false;
+  const value = (rawFilesystem as Record<string, unknown>).allow_host_root;
+  if (typeof value === 'boolean') return value;
+  return false;
+}
+
+function buildFilesystemConfig(
+  projectRoot: string,
+  allowHostRoot: boolean
+): FilesystemConfig {
+  const roots: FilesystemRootConfig[] = [
+    { id: 'workspace', kind: 'workspace', path: '.', resolvedPath: path.resolve(projectRoot, '.') },
+  ];
+  if (allowHostRoot) {
+    roots.push({ id: 'host', kind: 'host', path: '/', resolvedPath: '/' });
+  }
+  return { allow_host_root: allowHostRoot, roots };
 }
 
 const DEFAULT_SECURITY: SecurityConfig = {
@@ -265,7 +282,7 @@ export function loadConfig(configPath: string): TeepeeConfig {
     providers: {},
     agents: {},
     roles: {},
-    filesystem: buildFilesystemConfig(projectRoot),
+    filesystem: buildFilesystemConfig(projectRoot, parseAllowHostRoot(parsed.filesystem)),
     limits: { ...DEFAULT_LIMITS, ...parsed.limits },
     security: buildSecurityConfig(parsed.security),
   };
@@ -872,7 +889,18 @@ function buildMigratedConfigDocument(parsed: any, config: TeepeeConfig): Record<
   const next = JSON.parse(JSON.stringify(parsed)) as Record<string, unknown>;
   next.version = 2;
   next.roles = serializeRolesForV2(config.roles);
-  delete next.filesystem;
+
+  // Strip legacy filesystem.roots; preserve filesystem.allow_host_root when present.
+  const rawFilesystem = next.filesystem;
+  if (typeof rawFilesystem === 'object' && rawFilesystem !== null && !Array.isArray(rawFilesystem)) {
+    const fs = rawFilesystem as Record<string, unknown>;
+    delete fs.roots;
+    if (Object.keys(fs).length === 0) {
+      delete next.filesystem;
+    }
+  } else {
+    delete next.filesystem;
+  }
 
   const rawAgents = typeof next.agents === 'object' && next.agents !== null && !Array.isArray(next.agents)
     ? next.agents as Record<string, Record<string, unknown>>
@@ -892,7 +920,12 @@ function needsV2ConfigNormalization(parsed: any): boolean {
     return false;
   }
 
-  if (parsed.filesystem !== undefined) {
+  if (
+    typeof parsed.filesystem === 'object' &&
+    parsed.filesystem !== null &&
+    !Array.isArray(parsed.filesystem) &&
+    (parsed.filesystem as Record<string, unknown>).roots !== undefined
+  ) {
     return true;
   }
 

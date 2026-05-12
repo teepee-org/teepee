@@ -268,6 +268,9 @@ export function startServer(
     console.log(`\n  Project: ${config.teepee.name}`);
     console.log(`  Mode:    ${config.mode}`);
     console.log(`  Agents:  ${Object.keys(config.agents).join(', ')}`);
+    if (!config.filesystem.allow_host_root) {
+      console.log(`  Host fs: disabled (set filesystem.allow_host_root: true to enable)`);
+    }
     console.log(`\n  Open the owner login link to get started.`);
     console.log(`  The secret changes on every restart.\n`);
   });
