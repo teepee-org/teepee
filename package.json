@@ -1,6 +1,6 @@
 {
   "name": "teepee",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Teepee runs a team of AI agents — coordinating them in realtime.",
   "private": true,
   "workspaces": [
