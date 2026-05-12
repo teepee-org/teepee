@@ -2,6 +2,17 @@
 
 This project now keeps a forward-maintained release history here and on GitHub Releases.
 
+## v0.3.3
+
+Breaking change
+
+- The implicit `host` filesystem root (kind: `host`, path: `/`) is no longer registered by default. The owner — like every other role — now only sees the `workspace` root unless `filesystem.allow_host_root: true` is set in `.teepee/config.yaml`. Non-owner roles were already gated by the `files.host.access` capability; this change closes the gap for owners and makes secure-by-default the new normal. Re-enable with a single line if your workflow needs agents to browse outside the workspace.
+
+Other notes
+
+- Server startup now prints `Host fs: disabled (set filesystem.allow_host_root: true to enable)` when the flag is off, so operators can discover the override without grepping the config schema.
+- The v2 config migration preserves `filesystem.allow_host_root` while still stripping the legacy `filesystem.roots` field — opting in does not get clobbered on a restart.
+
 ## v0.3.2
 
 Features

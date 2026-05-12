@@ -1,6 +1,6 @@
 {
   "name": "teepee-server",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "HTTP and WebSocket server for Teepee.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,7 +23,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "teepee-core": "^0.3.2",
+    "teepee-core": "^0.3.3",
     "ws": "^8.17.0"
   },
   "devDependencies": {

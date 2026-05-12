@@ -26,6 +26,7 @@ export function createTestConfig(overrides: Partial<TeepeeConfig> = {}): TeepeeC
       owner: { superuser: true, agents: { coder: 'trusted' } },
     },
     filesystem: {
+      allow_host_root: false,
       roots: [{ id: 'workspace', kind: 'workspace', path: '.', resolvedPath: process.cwd() }],
     },
     limits: {

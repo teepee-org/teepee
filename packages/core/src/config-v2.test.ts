@@ -182,4 +182,81 @@ roles:
     expect(result.output).not.toContain('filesystem:');
     expect(result.output).toContain('files.workspace.access');
   });
+
+  it('preserves filesystem.allow_host_root while stripping legacy filesystem.roots', () => {
+    const file = tmpConfig(`
+version: 2
+mode: shared
+teepee:
+  name: test
+filesystem:
+  allow_host_root: true
+  roots:
+    - id: workspace
+      kind: workspace
+      path: .
+providers:
+  p:
+    command: "echo"
+agents:
+  coder:
+    provider: p
+roles:
+  owner:
+    superuser: true
+  collaborator:
+    capabilities:
+      - files.workspace.access
+      - messages.post
+    agents:
+      coder: readwrite
+  observer:
+    capabilities:
+      - files.workspace.access
+    agents: {}
+`);
+
+    const result = migrateConfigFileToV2(file);
+    expect(result.migrated).toBe(true);
+    expect(result.output).toContain('allow_host_root: true');
+    expect(result.output).not.toContain('roots:');
+
+    fs.writeFileSync(file, result.output, 'utf-8');
+    const config = loadConfig(file);
+    expect(config.filesystem.allow_host_root).toBe(true);
+    expect(config.filesystem.roots.map((r) => r.id)).toEqual(['workspace', 'host']);
+  });
+
+  it('does not re-migrate a config whose filesystem only carries allow_host_root', () => {
+    const file = tmpConfig(`
+version: 2
+mode: shared
+teepee:
+  name: test
+filesystem:
+  allow_host_root: true
+providers:
+  p:
+    command: "echo"
+agents:
+  coder:
+    provider: p
+roles:
+  owner:
+    superuser: true
+  collaborator:
+    capabilities:
+      - files.workspace.access
+      - messages.post
+    agents:
+      coder: readwrite
+  observer:
+    capabilities:
+      - files.workspace.access
+    agents: {}
+`);
+
+    const result = migrateConfigFileToV2(file);
+    expect(result.migrated).toBe(false);
+  });
 });

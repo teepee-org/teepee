@@ -646,6 +646,58 @@ agents:
     expect(config.security.sandbox.private_tmp).toBe(true);
     expect(config.security.sandbox.forward_env).toEqual([]);
   });
+
+  it('omits the host filesystem root by default (allow_host_root defaults to false)', () => {
+    const file = tmpConfig(`
+teepee:
+  name: hostroot-default
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.filesystem.allow_host_root).toBe(false);
+    expect(config.filesystem.roots.map((r) => r.id)).toEqual(['workspace']);
+  });
+
+  it('registers the host filesystem root when filesystem.allow_host_root is true', () => {
+    const file = tmpConfig(`
+teepee:
+  name: hostroot-on
+filesystem:
+  allow_host_root: true
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.filesystem.allow_host_root).toBe(true);
+    expect(config.filesystem.roots.map((r) => r.id)).toEqual(['workspace', 'host']);
+  });
+
+  it('treats non-boolean allow_host_root as the secure default (false)', () => {
+    const file = tmpConfig(`
+teepee:
+  name: hostroot-bogus
+filesystem:
+  allow_host_root: "yes"
+providers:
+  p:
+    command: "echo"
+agents:
+  a:
+    provider: p
+`);
+    const config = loadConfig(file);
+    expect(config.filesystem.allow_host_root).toBe(false);
+    expect(config.filesystem.roots.map((r) => r.id)).toEqual(['workspace']);
+  });
 });
 
 describe('resolveTimeout', () => {

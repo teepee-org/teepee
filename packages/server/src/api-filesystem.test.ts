@@ -82,6 +82,8 @@ version: 2
 mode: shared
 teepee:
   name: fs-api-test
+filesystem:
+  allow_host_root: true
 providers:
   echo:
     command: "cat"
